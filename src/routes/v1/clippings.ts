@@ -3,6 +3,8 @@ import { withTransaction, type DB } from '../../db/db.js';
 import { kosyncError, type AppEnv } from '../../auth/middleware.js';
 import { isValidDocument } from '../kosync.js';
 import { isItemId, nowSeconds, parseListParams } from '../../models/sync.js';
+import { fanOutHighlight } from '../../connectors/fanout.js';
+import { documentMeta } from '../../connectors/store.js';
 
 const MAX_BATCH = 50;
 const MAX_TEXT = 2048; // matches the firmware's My Clippings.txt export cap
@@ -130,6 +132,8 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
 
     type Op = () => void;
     const ops: Op[] = [];
+    type Highlight = { id: string; text: string; note: string | null; chapter: string; createdAt: number };
+    const highlights: Highlight[] = [];
     for (const raw of items) {
       const o = raw as Record<string, unknown>;
       if (!isItemId(o.id)) {
@@ -177,10 +181,32 @@ export function clippingRoutes(db: DB): Hono<AppEnv> {
           note, color, createdAt, now
         )
       );
+      highlights.push({ id, text, note, chapter, createdAt });
     }
     withTransaction(db, () => {
       for (const op of ops) op();
     });
+    // Fan out highlights to connectors that carry them (e.g. Readwise). Best
+    // effort; the document's title/author (if synced) become the Readwise book.
+    if (highlights.length > 0) {
+      const meta = documentMeta(db, user.id, document);
+      for (const h of highlights) {
+        fanOutHighlight(
+          db,
+          user.id,
+          document,
+          h.id,
+          {
+            text: h.text,
+            note: h.note,
+            title: meta.title,
+            author: meta.author,
+            highlightedAt: h.createdAt > 0 ? h.createdAt : null,
+          },
+          now
+        );
+      }
+    }
     return c.json({ until: now, accepted: ops.length });
   });
 

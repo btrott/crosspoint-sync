@@ -8,11 +8,18 @@ import { bookmarkRoutes } from './routes/v1/bookmarks.js';
 import { clippingRoutes } from './routes/v1/clippings.js';
 import { statsRoutes } from './routes/v1/stats.js';
 import { documentRoutes } from './routes/v1/documents.js';
+import { connectorRoutes } from './routes/v1/connectors.js';
+import type { HttpTransport } from './connectors/types.js';
 
 // Injected at build time via package.json; read lazily to keep this file dependency-free.
 export const VERSION = process.env.npm_package_version ?? '0.1.0';
 
-export function createApp(db: DB, config: Config): Hono<AppEnv> {
+export interface AppOptions {
+  /** Override the connector HTTP transport (tests inject a fake). */
+  connectorTransport?: HttpTransport;
+}
+
+export function createApp(db: DB, config: Config, opts: AppOptions = {}): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   app.get('/healthz', (c) => c.json({ status: 'ok', version: VERSION }));
@@ -29,6 +36,7 @@ export function createApp(db: DB, config: Config): Hono<AppEnv> {
   v1.route('/', clippingRoutes(db));
   v1.route('/', statsRoutes(db));
   v1.route('/', documentRoutes(db));
+  v1.route('/', connectorRoutes(db, opts.connectorTransport));
   app.route('/api/v1', v1);
 
   return app;
