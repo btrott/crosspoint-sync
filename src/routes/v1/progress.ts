@@ -22,6 +22,54 @@ export function progressRoutes(db: DB): Hono<AppEnv> {
     return c.json({ document: parsed.record.document, timestamp: parsed.record.updatedAt });
   });
 
+  // List every synced document with its newest progress (joined with any known
+  // metadata) — lets clients and UIs discover documents without knowing hashes.
+  app.get('/progress', (c) => {
+    const user = c.get('user');
+    const limitRaw = Number(c.req.query('limit') ?? 100);
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 500) : 100;
+    const rows = db
+      .prepare(
+        `SELECT p.document, p.device_id, p.device, p.percentage, p.progress, p.updated_at,
+                d.title, d.author, d.filename
+         FROM progress p
+         LEFT JOIN documents d ON d.user_id = p.user_id AND d.document = p.document
+         WHERE p.user_id = ?
+           AND p.updated_at = (
+             SELECT MAX(p2.updated_at) FROM progress p2
+             WHERE p2.user_id = p.user_id AND p2.document = p.document
+           )
+         GROUP BY p.document
+         ORDER BY p.updated_at DESC
+         LIMIT ?`
+      )
+      .all(user.id, limit) as unknown as {
+      document: string;
+      device_id: string;
+      device: string;
+      percentage: number;
+      progress: string;
+      updated_at: number;
+      title: string | null;
+      author: string | null;
+      filename: string | null;
+    }[];
+    return c.json({
+      items: rows.map((r) => ({
+        document: r.document,
+        title: r.title,
+        author: r.author,
+        filename: r.filename,
+        percentage: r.percentage,
+        progress: r.progress,
+        device_id: r.device_id,
+        device: r.device,
+        timestamp: r.updated_at,
+      })),
+    });
+  });
+
   app.get('/progress/:document', (c) => {
     const document = c.req.param('document');
     if (!isValidDocument(document)) {

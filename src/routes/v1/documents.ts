@@ -23,15 +23,22 @@ export function documentRoutes(db: DB): Hono<AppEnv> {
     const user = c.get('user');
     const now = nowSeconds();
     const upsert = db.prepare(
-      `INSERT INTO documents (user_id, document, title, author, filesize, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO documents (user_id, document, title, author, filename, filesize, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id, document) DO UPDATE SET
-         title = excluded.title,
-         author = excluded.author,
-         filesize = excluded.filesize,
+         title = COALESCE(excluded.title, documents.title),
+         author = COALESCE(excluded.author, documents.author),
+         filename = COALESCE(excluded.filename, documents.filename),
+         filesize = COALESCE(excluded.filesize, documents.filesize),
          updated_at = excluded.updated_at`
     );
-    type Row = { document: string; title: string | null; author: string | null; filesize: number | null };
+    type Row = {
+      document: string;
+      title: string | null;
+      author: string | null;
+      filename: string | null;
+      filesize: number | null;
+    };
     const rows: Row[] = [];
     for (const raw of items) {
       const o = raw as Record<string, unknown>;
@@ -42,6 +49,7 @@ export function documentRoutes(db: DB): Hono<AppEnv> {
         document: o.document,
         title: typeof o.title === 'string' ? o.title.slice(0, 512) : null,
         author: typeof o.author === 'string' ? o.author.slice(0, 512) : null,
+        filename: typeof o.filename === 'string' ? o.filename.slice(0, 512) : null,
         filesize:
           typeof o.filesize === 'number' && Number.isInteger(o.filesize) && o.filesize >= 0
             ? o.filesize
@@ -50,7 +58,7 @@ export function documentRoutes(db: DB): Hono<AppEnv> {
     }
     withTransaction(db, () => {
       for (const r of rows) {
-        upsert.run(user.id, r.document, r.title, r.author, r.filesize, now);
+        upsert.run(user.id, r.document, r.title, r.author, r.filename, r.filesize, now);
       }
     });
     return c.json({ until: now, accepted: rows.length });
@@ -60,7 +68,7 @@ export function documentRoutes(db: DB): Hono<AppEnv> {
     const user = c.get('user');
     const rows = db
       .prepare(
-        'SELECT document, title, author, filesize, updated_at FROM documents WHERE user_id = ? ORDER BY updated_at DESC LIMIT 500'
+        'SELECT document, title, author, filename, filesize, updated_at FROM documents WHERE user_id = ? ORDER BY updated_at DESC LIMIT 500'
       )
       .all(user.id);
     return c.json({ items: rows });

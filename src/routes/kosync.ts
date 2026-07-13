@@ -27,7 +27,46 @@ export interface ProgressUpsert {
   percentage: number;
   progress: string;
   position: string | null;
+  metadata: DocumentMetadata | null;
   updatedAt: number;
+}
+
+/** Optional document metadata sent by CrossPoint/KOReader (KOReader PR #15306). */
+export interface DocumentMetadata {
+  filename: string | null;
+  title: string | null;
+  authors: string | null;
+}
+
+function parseMetadata(raw: unknown): DocumentMetadata | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const o = raw as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' && v.length > 0 ? v.slice(0, 512) : null);
+  const meta: DocumentMetadata = {
+    filename: str(o.filename),
+    title: str(o.title),
+    authors: str(o.authors),
+  };
+  return meta.filename || meta.title || meta.authors ? meta : null;
+}
+
+/** Stores progress-PUT metadata without clobbering fields the client didn't send. */
+export function upsertDocumentMetadata(
+  db: DB,
+  userId: number,
+  document: string,
+  meta: DocumentMetadata,
+  updatedAt: number
+): void {
+  db.prepare(
+    `INSERT INTO documents (user_id, document, title, author, filename, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, document) DO UPDATE SET
+       title = COALESCE(excluded.title, documents.title),
+       author = COALESCE(excluded.author, documents.author),
+       filename = COALESCE(excluded.filename, documents.filename),
+       updated_at = excluded.updated_at`
+  ).run(userId, document, meta.title, meta.authors, meta.filename, updatedAt);
 }
 
 export function upsertProgress(db: DB, p: ProgressUpsert): void {
@@ -41,6 +80,9 @@ export function upsertProgress(db: DB, p: ProgressUpsert): void {
        position = COALESCE(excluded.position, progress.position),
        updated_at = excluded.updated_at`
   ).run(p.userId, p.document, p.deviceId, p.device, p.percentage, p.progress, p.position, p.updatedAt);
+  if (p.metadata) {
+    upsertDocumentMetadata(db, p.userId, p.document, p.metadata, p.updatedAt);
+  }
 }
 
 /**
@@ -86,6 +128,7 @@ export function parseProgressBody(
       percentage,
       progress: o.progress,
       position,
+      metadata: parseMetadata(o.metadata),
       updatedAt: nowSeconds(),
     },
   };

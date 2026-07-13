@@ -83,8 +83,23 @@ Validates credentials. `200 {"authorized": "OK"}` or `401`.
   overwrite each other. If `device_id` is absent, `device` is used as the device key.
 - `percentage` is a float in `[0, 1]`. `timestamp` is unix **seconds** (integer).
 - **Superset capture:** the body may include the extended `position` object (see
-  `PUT /api/v1/progress`). If present and valid it is stored; unknown fields are ignored. This lets
-  firmware ship rich sync against this endpoint with a one-line change.
+  `PUT /api/v1/progress`) and/or a `metadata` object (below). If present and valid they are
+  stored; unknown fields are ignored. This lets firmware ship rich sync against this endpoint
+  with a one-line change.
+- **Metadata capture** (KOReader PR #15306 shape, sent by CrossPoint when the "send metadata"
+  setting is on):
+
+  ```json
+  "metadata": {
+    "filename": "Foundryside - Robert Jackson Bennett.epub",
+    "title": "Foundryside",
+    "authors": "Robert Jackson Bennett"
+  }
+  ```
+
+  All fields optional strings (≤512 chars). Stored per `(user, document)`; fields the client
+  omits never overwrite previously stored values. Retrieve via `GET /api/v1/documents` or joined
+  into `GET /api/v1/progress`.
 
 ### GET /syncs/progress/{document}
 
@@ -162,6 +177,26 @@ Response: `{"document": "...", "timestamp": 1752345678}`.
 
 An invalid `position` is ignored (the kosync fields still sync); a missing `position` on a later
 PUT keeps the previously stored one for that device.
+
+#### GET /api/v1/progress
+
+Lists every synced document — newest progress across devices, joined with any stored metadata.
+This is how clients/UIs discover documents without knowing hashes. `?limit=` defaults to 100
+(max 500), ordered newest-first.
+
+```json
+{
+  "items": [
+    {"document": "25f8abb4f4f5594f02f361726814fea1",
+     "title": "Foundryside", "author": "Robert Jackson Bennett",
+     "filename": "Foundryside - Robert Jackson Bennett.epub",
+     "percentage": 0.2853, "progress": "/body/DocFragment[16]/body/div[1]/p[143]",
+     "device_id": "crosspoint-reader", "device": "CrossPoint", "timestamp": 1783913361}
+  ]
+}
+```
+
+`title`/`author`/`filename` are `null` until some client sends metadata for that document.
 
 #### GET /api/v1/progress/{document}
 
@@ -335,8 +370,9 @@ weighted by `pace_n`, `start_date` = earliest non-zero, `finished_date` = latest
 ### Documents metadata (optional)
 
 `PUT /api/v1/documents` — `{"items": [{"document": "...", "title": "...", "author": "...",
-"filesize": 812345}]}` (max 50). `GET /api/v1/documents` lists them. Purely cosmetic — enables a
-future web UI to show titles instead of hashes.
+"filename": "...", "filesize": 812345}]}` (max 50); omitted fields never overwrite stored values.
+`GET /api/v1/documents` lists them. Most clients don't need this endpoint — progress-PUT
+`metadata` capture populates the same table.
 
 ### GET /healthz
 
