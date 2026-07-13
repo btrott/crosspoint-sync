@@ -1,0 +1,12 @@
+services:
+  crosspoint-sync:
+    build: .
+    # or, once published: image: ghcr.io/<org>/crosspoint-sync:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      # Set to "true" on private instances once your accounts exist.
+      REGISTRATION_DISABLED: "false"
+    restart: unless-stopped

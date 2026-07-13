@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t crosspoint-sync:ci .
+      - name: Smoke test container
+        run: |
+          docker run -d --name cps -p 8080:8080 crosspoint-sync:ci
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8080/healthz && break
+            sleep 1
+          done
+          scripts/curl-smoke.sh http://localhost:8080
