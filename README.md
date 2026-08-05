@@ -24,11 +24,18 @@ The full wire contract is in [docs/API.md](docs/API.md).
 ```sh
 docker run -d --name crosspoint-sync \
   -p 8080:8080 \
-  -v "$PWD/data:/data" \
-  ghcr.io/OWNER/crosspoint-sync:latest
+  -v crosspoint-data:/data \
+  ghcr.io/crosspoint-reader/crosspoint-sync:main
 ```
 
-Or from a checkout: `docker compose up -d` (see `docker-compose.yml`).
+Or from a checkout: `docker compose up -d` uses the published image from
+`docker-compose.yml`.
+
+For local image builds from the checkout, use:
+
+```sh
+docker compose -f docker-compose.dev.yml up -d --build
+```
 
 ### Railway (hosted-style deploy)
 
