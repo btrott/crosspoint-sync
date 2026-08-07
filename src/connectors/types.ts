@@ -106,6 +106,8 @@ export interface Connector {
   credentialKind: CredentialKind;
   /** Whether the connector is experimental (Tier 2/3 cookie-replay). */
   experimental: boolean;
+  /** Hidden from the connector list/UI (still registered; not user-linkable via the UI). */
+  hidden?: boolean;
 
   /** Validate a credential and return the account label if possible. */
   validate(cred: Credential, http: HttpTransport): Promise<ValidateResult>;

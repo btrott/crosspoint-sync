@@ -148,6 +148,9 @@ export const readwiseConnector: Connector = {
   carries: ['highlight'],
   credentialKind: 'token',
   experimental: false,
+  // Hidden until the fan-in hop is wired and firmware sends clippings; the code
+  // stays registered so re-enabling is a one-line change.
+  hidden: true,
   validate,
   match,
   push,

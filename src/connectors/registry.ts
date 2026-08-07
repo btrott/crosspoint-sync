@@ -14,8 +14,9 @@ const CONNECTORS: Connector[] = [
 
 const byId = new Map(CONNECTORS.map((c) => [c.id, c]));
 
+/** Connectors shown in the UI/API (excludes hidden ones). */
 export function listConnectors(): Connector[] {
-  return CONNECTORS;
+  return CONNECTORS.filter((c) => !c.hidden);
 }
 
 export function getConnector(id: string): Connector | undefined {
