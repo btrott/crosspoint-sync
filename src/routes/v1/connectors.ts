@@ -81,6 +81,56 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
     return c.json({ id: conn.id, linked: true, account: result.accountLabel ?? null });
   });
 
+  // Begin an interactive device-code link (BookFusion). Returns the user code +
+  // verification URL for the browser to show, and the device code to poll with.
+  app.post('/connectors/:id/link/begin', async (c) => {
+    const conn = getConnector(c.req.param('id'));
+    if (!conn) return c.json({ code: 2003, message: 'Unknown connector' }, 404);
+    if (!conn.beginLink) return c.json({ code: 2003, message: 'Connector has no device link' }, 400);
+    if (!secretsEnabled()) {
+      return c.json({ code: 2003, message: 'Server has no TOKEN_ENC_KEY; connector storage disabled' }, 403);
+    }
+    try {
+      const start = await conn.beginLink(transport);
+      return c.json({
+        device_code: start.deviceCode,
+        user_code: start.userCode,
+        verification_uri: start.verificationUri,
+        interval: start.interval,
+        expires_in: start.expiresIn,
+      });
+    } catch (err) {
+      return c.json({ code: 2003, message: err instanceof Error ? err.message : 'Link failed' }, 502);
+    }
+  });
+
+  // Poll a device-code link; on success, store the credential and link.
+  app.post('/connectors/:id/link/poll', async (c) => {
+    const conn = getConnector(c.req.param('id'));
+    if (!conn) return c.json({ code: 2003, message: 'Unknown connector' }, 404);
+    if (!conn.pollLink) return c.json({ code: 2003, message: 'Connector has no device link' }, 400);
+    let deviceCode: unknown;
+    try {
+      deviceCode = ((await c.req.json()) as Record<string, unknown>).device_code;
+    } catch {
+      return kosyncError(c, 403, 2003, 'Invalid request');
+    }
+    if (typeof deviceCode !== 'string') return kosyncError(c, 403, 2003, 'Invalid request');
+    try {
+      const result = await conn.pollLink(deviceCode, transport);
+      if (result.status === 'ok' && result.credential) {
+        const user = c.get('user');
+        // Confirm the freshly minted credential works, then store it.
+        const v = await conn.validate(result.credential, transport);
+        upsertAccount(db, user.id, conn.id, result.credential, v.accountLabel ?? result.accountLabel ?? null);
+        return c.json({ status: 'ok', linked: true });
+      }
+      return c.json({ status: result.status, error: result.error ?? null });
+    } catch (err) {
+      return c.json({ status: 'error', error: err instanceof Error ? err.message : 'poll failed' }, 502);
+    }
+  });
+
   // Unlink and wipe queued work + matches.
   app.delete('/connectors/:id', (c) => {
     const conn = getConnector(c.req.param('id'));
@@ -115,7 +165,7 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
     });
   });
 
-  // Manually set/override a match (sticky — never auto-recomputed).
+  // Manually set/override a match (sticky - never auto-recomputed).
   app.put('/connectors/:id/matches/:document', async (c) => {
     const conn = getConnector(c.req.param('id'));
     if (!conn) return c.json({ code: 2003, message: 'Unknown connector' }, 404);
@@ -133,7 +183,7 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
     const externalId = o.external_id;
     const user = c.get('user');
     if (externalId === null) {
-      // Explicit "no match" override — stop trying to sync this document.
+      // Explicit "no match" override - stop trying to sync this document.
       saveMatch(db, user.id, conn.id, document, null, 'manual');
       return c.json({ document, external_id: null, source: 'manual' });
     }
@@ -155,7 +205,7 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
     return c.json({ document, external_id: externalId, source: 'manual' });
   });
 
-  // Force (re)matching of a document now — useful for testing and the review UI.
+  // Force (re)matching of a document now - useful for testing and the review UI.
   app.post('/connectors/:id/rematch/:document', async (c) => {
     const conn = getConnector(c.req.param('id'));
     if (!conn) return c.json({ code: 2003, message: 'Unknown connector' }, 404);

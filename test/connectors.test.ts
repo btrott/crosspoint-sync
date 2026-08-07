@@ -54,7 +54,7 @@ describe('connector management API', () => {
     const body = await res.json();
     expect(body.encryption).toBe('enabled');
     const ids = body.connectors.map((c: { id: string }) => c.id).sort();
-    expect(ids).toEqual(['hardcover', 'readwise']);
+    expect(ids).toEqual(['bookfusion', 'hardcover', 'kosync', 'readwise']);
     expect(body.connectors.every((c: { linked: boolean }) => !c.linked)).toBe(true);
   });
 

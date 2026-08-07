@@ -3,7 +3,7 @@ import type { DocumentMeta } from './types.js';
 /**
  * Shared, connector-agnostic book-matching helpers. Connectors call their own
  * search API, then use scoreCandidate() to rank results against the document's
- * title/author. Pure functions — unit-tested independently of any network.
+ * title/author. Pure functions - unit-tested independently of any network.
  */
 
 /** Fold diacritics, lowercase, drop punctuation, collapse whitespace. */
@@ -39,13 +39,13 @@ export function normalizeAuthor(author: string): string {
 /**
  * Derive {title, author} for book matching. The EPUB's own title/author (which
  * the firmware extracts and sends in the progress `metadata` object) is the real
- * signal — this is the primary and expected path.
+ * signal - this is the primary and expected path.
  *
  * Filename is only a last resort for the rare title-less case (a malformed EPUB
  * whose getTitle() was empty). Note it can't rescue the "no metadata at all"
  * case: filename ships in the same metadata object as title/author, so if we
  * lack title we usually lack filename too. We deliberately do NOT guess
- * "Title - Author" vs "Author - Title" ordering — we drop the separators and let
+ * "Title - Author" vs "Author - Title" ordering - we drop the separators and let
  * the whole string be a fuzzy search query, which search engines handle fine.
  */
 export function extractTitleAuthor(doc: DocumentMeta): { title: string; author: string } | null {
@@ -112,7 +112,7 @@ export interface MatchDecision {
 /**
  * Rank candidates and decide whether to auto-accept: the top must clear
  * `threshold` AND beat the runner-up by `margin` (unless the runner-up is the
- * same book — same normalized title+author — in which case ambiguity between
+ * same book - same normalized title+author - in which case ambiguity between
  * editions is fine and we take the more popular one).
  */
 export function decideMatch(

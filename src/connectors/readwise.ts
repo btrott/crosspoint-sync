@@ -11,10 +11,10 @@ import type {
 
 /**
  * Readwise connector (Tier 1). Official REST API, per-user access token.
- * Carries highlights/notes only — NOT reading progress. Bidirectional:
+ * Carries highlights/notes only - NOT reading progress. Bidirectional:
  *  - fan-out: push CrossInk clippings via POST /api/v2/highlights/
  *  - fan-in: pull highlights via GET /api/v2/export/ (incl. Kindle, which
- *    Readwise ingests for us — the "aggregator hop", see docs/design/sync-hub.md).
+ *    Readwise ingests for us - the "aggregator hop", see docs/design/sync-hub.md).
  *
  * LIVE-VERIFY GATE: the v2 field names below follow Readwise's documented API
  * (readwise.io/api_deets) but should be reconfirmed at implementation. Endpoints
@@ -51,7 +51,7 @@ async function validate(cred: Credential, http: HttpTransport): Promise<Validate
 
 /**
  * Readwise groups highlights by (title, author) rather than an external book id
- * we look up ahead of time — when we push, we send title/author and Readwise
+ * we look up ahead of time - when we push, we send title/author and Readwise
  * creates/finds the book. So "matching" is trivial: any document with a title
  * (or a parseable filename) is pushable. We store a synthetic match so the
  * runner treats it as matched.
@@ -114,7 +114,7 @@ async function push(
  * Fan-in: export highlights updated since a cursor. Returns raw Readwise books
  * (each with a highlights[] array) plus the nextCursor for incremental pulls.
  * The caller maps these into the canonical clippings store. Kept separate from
- * the Connector interface (which is fan-out only for now) — wired when clipping
+ * the Connector interface (which is fan-out only for now) - wired when clipping
  * fan-in lands.
  */
 export async function exportHighlights(

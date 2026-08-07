@@ -9,9 +9,17 @@ export interface AuthedUser {
   username: string;
 }
 
+export interface AuthedAccount {
+  id: number;
+  handle: string;
+}
+
 export type AppEnv = {
   Variables: {
+    /** The kosync sync identity that owns the reading data (device or resolved from web session). */
     user: AuthedUser;
+    /** The master ("general login") account, set on web-session routes. */
+    account: AuthedAccount;
   };
 };
 
@@ -57,20 +65,49 @@ export function authMiddleware(db: DB): MiddlewareHandler<AppEnv> {
 }
 
 /**
- * Accept EITHER a web session cookie OR the device x-auth headers. Used for the
- * /api/v1 surface so both the browser (cookie) and the firmware (headers) reach
- * the same endpoints. The cookie path is checked first and is cheap (HMAC, no
- * PBKDF2); falls through to header auth when absent.
+ * Require a valid master ("general login") session cookie. Sets `account`.
+ * Used for the /account management surface (kosync link, master token rotate).
+ */
+export function masterAuth(db: DB): MiddlewareHandler<AppEnv> {
+  const getAccount = db.prepare('SELECT id, handle FROM accounts WHERE id = ?');
+  return async (c, next) => {
+    const session = verifySession(getCookie(c, SESSION_COOKIE));
+    if (!session) return kosyncError(c, 401, 2001, 'Not signed in');
+    const row = getAccount.get(session.uid) as { id: number; handle: string } | undefined;
+    if (!row) return kosyncError(c, 401, 2001, 'Not signed in');
+    c.set('account', { id: row.id, handle: row.handle });
+    await next();
+  };
+}
+
+/**
+ * Accept EITHER a web session cookie OR the device x-auth headers, resolving to
+ * the kosync sync identity that owns the reading data. Used for the /api/v1
+ * surface so both the browser and the firmware reach the same endpoints:
+ *  - device: x-auth headers -> the kosync user directly.
+ *  - web: master session cookie -> the account's linked native kosync user.
+ * A signed-in master account with no kosync account linked yet gets 409 (the
+ * web UI prompts to create/link one before showing data).
  */
 export function sessionOrKeyAuth(db: DB): MiddlewareHandler<AppEnv> {
   const headerAuth = authMiddleware(db);
-  const getById = db.prepare('SELECT id, username FROM users WHERE id = ?');
+  const getAccount = db.prepare('SELECT id, handle FROM accounts WHERE id = ?');
+  const getKosyncForAccount = db.prepare(
+    'SELECT id, username FROM users WHERE account_id = ?'
+  );
   return async (c, next) => {
     const session = verifySession(getCookie(c, SESSION_COOKIE));
     if (session) {
-      const row = getById.get(session.uid) as { id: number; username: string } | undefined;
-      if (row) {
-        c.set('user', { id: row.id, username: row.username });
+      const account = getAccount.get(session.uid) as { id: number; handle: string } | undefined;
+      if (account) {
+        c.set('account', account);
+        const kosync = getKosyncForAccount.get(account.id) as
+          | { id: number; username: string }
+          | undefined;
+        if (!kosync) {
+          return c.json({ code: 2005, message: 'No sync account linked' }, 409);
+        }
+        c.set('user', kosync);
         return next();
       }
     }

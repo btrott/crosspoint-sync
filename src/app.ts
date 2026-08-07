@@ -4,6 +4,7 @@ import type { Config } from './config.js';
 import { sessionOrKeyAuth, type AppEnv } from './auth/middleware.js';
 import { kosyncRoutes } from './routes/kosync.js';
 import { authRoutes } from './routes/auth.js';
+import { accountRoutes } from './routes/account.js';
 import { webRoutes } from './routes/web.js';
 import { progressRoutes } from './routes/v1/progress.js';
 import { bookmarkRoutes } from './routes/v1/bookmarks.js';
@@ -29,12 +30,13 @@ export function createApp(db: DB, config: Config, opts: AppOptions = {}): Hono<A
   // Web UI (landing / account pages).
   app.route('/', webRoutes());
 
-  // kosync-compatible API at the root — stock KOReader and current CrossPoint
+  // kosync-compatible API at the root - stock KOReader and current CrossPoint
   // firmware work by changing only the server URL.
   app.route('/', kosyncRoutes(db, config));
 
-  // Web account session auth (browser signup/login).
+  // Web account session auth (browser signup/login) + kosync link management.
   app.route('/auth', authRoutes(db, config));
+  app.route('/account', accountRoutes(db, config));
 
   // Extended CrossPoint API; accepts either the web session cookie or the
   // device x-auth headers.

@@ -8,7 +8,22 @@ export type Capability = { read: boolean; write: boolean };
 /** What data types a connector carries (progress/shelves vs highlights). */
 export type DataKind = 'progress' | 'finished' | 'highlight';
 
-export type CredentialKind = 'token' | 'oauth' | 'cookies';
+export type CredentialKind = 'token' | 'oauth' | 'cookies' | 'kosync' | 'device_code';
+
+/** Interactive OAuth device-code link handshake (BookFusion). */
+export interface DeviceLinkStart {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  interval: number;
+  expiresIn: number;
+}
+export interface DeviceLinkPoll {
+  status: 'pending' | 'ok' | 'denied' | 'expired' | 'error';
+  credential?: Record<string, unknown>;
+  accountLabel?: string;
+  error?: string;
+}
 
 /** Feasibility/trust tier from the design doc. */
 export type Tier = 1 | 2 | 3;
@@ -34,6 +49,10 @@ export interface OutboundEvent {
   document: string;
   /** 0..1 reading fraction (progress/finished events). */
   percentage?: number;
+  /** kosync progress string (xpath/CFI). Present on progress events; used by the kosync mirror. */
+  progress?: string;
+  /** Rich CrossPoint position, forwarded losslessly by the kosync mirror. */
+  position?: Record<string, unknown> | null;
   /** unix seconds when this happened on the device/server. */
   timestamp: number;
   /** For highlight events. */
@@ -96,4 +115,9 @@ export interface Connector {
 
   /** Push one outbound event. Only called for write-capable connectors. */
   push(cred: Credential, match: Match, ev: OutboundEvent, http: HttpTransport): Promise<PushResult>;
+
+  /** Begin an interactive device-code link (OAuth device grant). Optional. */
+  beginLink?(http: HttpTransport): Promise<DeviceLinkStart>;
+  /** Poll a device-code link until it completes. Optional. */
+  pollLink?(deviceCode: string, http: HttpTransport): Promise<DeviceLinkPoll>;
 }

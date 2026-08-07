@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 /**
  * Symmetric encryption for connector credentials (third-party tokens and session
  * cookie bundles) at rest. AES-256-GCM with a random per-record IV; the auth tag
- * detects tampering. The key comes from TOKEN_ENC_KEY — if it's unset, all
+ * detects tampering. The key comes from TOKEN_ENC_KEY - if it's unset, all
  * connectors are disabled rather than storing secrets in the clear.
  *
  * Wire format (base64 of): [1-byte version][12-byte iv][16-byte tag][ciphertext]

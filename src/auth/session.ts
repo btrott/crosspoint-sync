@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 /**
  * Stateless signed session cookies for the web account. Format:
  *   base64url(JSON{uid, exp}) + '.' + base64url(HMAC-SHA256(payload))
- * No session table — the HMAC makes the cookie unforgeable. Signed with
+ * No session table - the HMAC makes the cookie unforgeable. Signed with
  * SESSION_SECRET (falls back to TOKEN_ENC_KEY, then an ephemeral per-process key
  * so zero-config still works, at the cost of sessions dropping on restart).
  */
@@ -25,7 +25,7 @@ function sessionSecret(env: NodeJS.ProcessEnv = process.env): Buffer {
       warnedEphemeral = true;
       console.warn(
         JSON.stringify({
-          msg: 'no SESSION_SECRET/TOKEN_ENC_KEY set; using an ephemeral key — sessions drop on restart',
+          msg: 'no SESSION_SECRET/TOKEN_ENC_KEY set; using an ephemeral key; sessions drop on restart',
         })
       );
     }

@@ -13,8 +13,8 @@ migrate(db);
 
 const app = createApp(db, fromEnv());
 
-// Connector fan-out queue worker (only meaningful when encryption — hence
-// connectors — is configured).
+// Connector fan-out queue worker (only meaningful when encryption - hence
+// connectors - is configured).
 const connectorsEnabled = secretsEnabled();
 if (connectorsEnabled) {
   startQueueWorker(db);

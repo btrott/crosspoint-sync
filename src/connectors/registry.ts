@@ -1,9 +1,16 @@
 import type { Connector, HttpTransport } from './types.js';
 import { hardcoverConnector } from './hardcover.js';
 import { readwiseConnector } from './readwise.js';
+import { kosyncConnector } from './kosync.js';
+import { bookfusionConnector } from './bookfusion.js';
 
-/** All connectors known to this build. Tier 2/3 are added here as they land. */
-const CONNECTORS: Connector[] = [hardcoverConnector, readwiseConnector];
+/** All connectors known to this build. */
+const CONNECTORS: Connector[] = [
+  kosyncConnector,
+  hardcoverConnector,
+  readwiseConnector,
+  bookfusionConnector,
+];
 
 const byId = new Map(CONNECTORS.map((c) => [c.id, c]));
 

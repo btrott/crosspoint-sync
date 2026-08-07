@@ -62,7 +62,7 @@ export async function processRow(db: DB, row: QueueRow, http: HttpTransport): Pr
   const connector = getConnector(row.connector_id);
   const account = getAccount(db, row.user_id, row.connector_id);
   if (!connector || !account || !account.enabled) {
-    // Connector gone or disabled — drop permanently.
+    // Connector gone or disabled - drop permanently.
     markFailed(db, row, 'connector unavailable or disabled', false);
     return;
   }

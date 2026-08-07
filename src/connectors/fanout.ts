@@ -30,13 +30,25 @@ export function fanOutProgress(
   userId: number,
   document: string,
   percentage: number,
-  timestamp: number
+  timestamp: number,
+  progress?: string,
+  positionJson?: string | null
 ): void {
   const finished = percentage >= 0.98;
+  let position: Record<string, unknown> | null = null;
+  if (positionJson) {
+    try {
+      position = JSON.parse(positionJson) as Record<string, unknown>;
+    } catch {
+      position = null;
+    }
+  }
   fanOut(db, userId, {
     kind: finished ? 'finished' : 'progress',
     document,
     percentage,
+    progress,
+    position,
     timestamp,
   });
 }
