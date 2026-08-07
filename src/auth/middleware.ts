@@ -1,6 +1,8 @@
 import type { Context, MiddlewareHandler } from 'hono';
+import { getCookie } from 'hono/cookie';
 import type { DB } from '../db/db.js';
 import { verifyKey } from './password.js';
+import { SESSION_COOKIE, verifySession } from './session.js';
 
 export interface AuthedUser {
   id: number;
@@ -51,6 +53,28 @@ export function authMiddleware(db: DB): MiddlewareHandler<AppEnv> {
     }
     c.set('user', { id: row.id, username: row.username });
     await next();
+  };
+}
+
+/**
+ * Accept EITHER a web session cookie OR the device x-auth headers. Used for the
+ * /api/v1 surface so both the browser (cookie) and the firmware (headers) reach
+ * the same endpoints. The cookie path is checked first and is cheap (HMAC, no
+ * PBKDF2); falls through to header auth when absent.
+ */
+export function sessionOrKeyAuth(db: DB): MiddlewareHandler<AppEnv> {
+  const headerAuth = authMiddleware(db);
+  const getById = db.prepare('SELECT id, username FROM users WHERE id = ?');
+  return async (c, next) => {
+    const session = verifySession(getCookie(c, SESSION_COOKIE));
+    if (session) {
+      const row = getById.get(session.uid) as { id: number; username: string } | undefined;
+      if (row) {
+        c.set('user', { id: row.id, username: row.username });
+        return next();
+      }
+    }
+    return headerAuth(c, next);
   };
 }
 

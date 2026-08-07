@@ -1,8 +1,10 @@
 import { Hono } from 'hono';
 import type { DB } from './db/db.js';
 import type { Config } from './config.js';
-import { authMiddleware, type AppEnv } from './auth/middleware.js';
+import { sessionOrKeyAuth, type AppEnv } from './auth/middleware.js';
 import { kosyncRoutes } from './routes/kosync.js';
+import { authRoutes } from './routes/auth.js';
+import { webRoutes } from './routes/web.js';
 import { progressRoutes } from './routes/v1/progress.js';
 import { bookmarkRoutes } from './routes/v1/bookmarks.js';
 import { clippingRoutes } from './routes/v1/clippings.js';
@@ -24,13 +26,20 @@ export function createApp(db: DB, config: Config, opts: AppOptions = {}): Hono<A
 
   app.get('/healthz', (c) => c.json({ status: 'ok', version: VERSION }));
 
+  // Web UI (landing / account pages).
+  app.route('/', webRoutes());
+
   // kosync-compatible API at the root — stock KOReader and current CrossPoint
   // firmware work by changing only the server URL.
   app.route('/', kosyncRoutes(db, config));
 
-  // Extended CrossPoint API; same auth headers.
+  // Web account session auth (browser signup/login).
+  app.route('/auth', authRoutes(db, config));
+
+  // Extended CrossPoint API; accepts either the web session cookie or the
+  // device x-auth headers.
   const v1 = new Hono<AppEnv>();
-  v1.use('*', authMiddleware(db));
+  v1.use('*', sessionOrKeyAuth(db));
   v1.route('/', progressRoutes(db));
   v1.route('/', bookmarkRoutes(db));
   v1.route('/', clippingRoutes(db));

@@ -13,7 +13,7 @@ import { parsePosition } from '../models/position.js';
 import { nowSeconds } from '../models/sync.js';
 import { fanOutProgress } from '../connectors/fanout.js';
 
-const USERNAME_RE = /^[A-Za-z0-9._@+-]{1,64}$/;
+export const USERNAME_RE = /^[A-Za-z0-9._@+-]{1,64}$/;
 
 export function isValidDocument(v: unknown): v is string {
   // KOReader sends a 32-hex MD5, but the key is opaque — stay lenient.
