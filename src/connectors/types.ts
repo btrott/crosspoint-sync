@@ -1,0 +1,125 @@
+/**
+ * Connector framework types. A connector adapts crosspoint-sync's canonical
+ * reading state to one external service. See docs/design/sync-hub.md.
+ */
+
+export type Capability = { read: boolean; write: boolean };
+
+/** What data types a connector carries (progress/shelves vs highlights). */
+export type DataKind = 'progress' | 'finished' | 'highlight';
+
+export type CredentialKind = 'token' | 'oauth' | 'cookies' | 'kosync' | 'device_code';
+
+/** Interactive OAuth device-code link handshake (BookFusion). */
+export interface DeviceLinkStart {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  interval: number;
+  expiresIn: number;
+}
+export interface DeviceLinkPoll {
+  status: 'pending' | 'ok' | 'denied' | 'expired' | 'error';
+  credential?: Record<string, unknown>;
+  accountLabel?: string;
+  error?: string;
+}
+
+/** Feasibility/trust tier from the design doc. */
+export type Tier = 1 | 2 | 3;
+
+/** Metadata we know about a document, used for server-side book matching. */
+export interface DocumentMeta {
+  document: string;
+  title: string | null;
+  author: string | null;
+  filename: string | null;
+}
+
+export interface Match {
+  externalId: string;
+  externalEdition?: string | null;
+  confidence: number; // 0..1
+  queryUsed?: string;
+}
+
+/** A canonical reading event to fan out to a connector. */
+export interface OutboundEvent {
+  kind: DataKind;
+  document: string;
+  /** 0..1 reading fraction (progress/finished events). */
+  percentage?: number;
+  /** kosync progress string (xpath/CFI). Present on progress events; used by the kosync mirror. */
+  progress?: string;
+  /** Rich CrossPoint position, forwarded losslessly by the kosync mirror. */
+  position?: Record<string, unknown> | null;
+  /** unix seconds when this happened on the device/server. */
+  timestamp: number;
+  /** For highlight events. */
+  highlight?: {
+    text: string;
+    note?: string | null;
+    title?: string | null;
+    author?: string | null;
+    location?: number | null;
+    highlightedAt?: number | null;
+  };
+}
+
+/** Result of a push attempt; retryable=false means don't re-queue (permanent). */
+export type PushResult =
+  | { ok: true }
+  | { ok: false; retryable: boolean; error: string; needsReauth?: boolean };
+
+export interface ValidateResult {
+  ok: boolean;
+  accountLabel?: string;
+  error?: string;
+}
+
+/**
+ * Minimal HTTP transport injected into connectors so tests can supply a fake
+ * without real network access. Mirrors the subset of fetch we use.
+ */
+export interface HttpTransport {
+  (url: string, init: {
+    method: string;
+    headers?: Record<string, string>;
+    body?: string;
+  }): Promise<{
+    status: number;
+    text(): Promise<string>;
+    json(): Promise<unknown>;
+  }>;
+}
+
+/** A parsed credential (shape is connector-specific; stored encrypted as JSON). */
+export type Credential = Record<string, unknown>;
+
+export interface Connector {
+  id: string;
+  displayName: string;
+  tier: Tier;
+  capabilities: Capability;
+  /** Which data kinds this connector accepts on fan-out. */
+  carries: DataKind[];
+  credentialKind: CredentialKind;
+  /** Whether the connector is experimental (Tier 2/3 cookie-replay). */
+  experimental: boolean;
+  /** Hidden from the connector list/UI (still registered; not user-linkable via the UI). */
+  hidden?: boolean;
+
+  /** Validate a credential and return the account label if possible. */
+  validate(cred: Credential, http: HttpTransport): Promise<ValidateResult>;
+
+  /** Resolve a document to an external book id. Null = no confident match. */
+  match(cred: Credential, doc: DocumentMeta, http: HttpTransport): Promise<Match | null>;
+
+  /** Push one outbound event. Only called for write-capable connectors. */
+  push(cred: Credential, match: Match, ev: OutboundEvent, http: HttpTransport): Promise<PushResult>;
+
+  /** Begin an interactive device-code link (OAuth device grant). Optional. */
+  beginLink?(http: HttpTransport): Promise<DeviceLinkStart>;
+  /** Poll a device-code link until it completes. Optional. */
+  pollLink?(deviceCode: string, http: HttpTransport): Promise<DeviceLinkPoll>;
+}

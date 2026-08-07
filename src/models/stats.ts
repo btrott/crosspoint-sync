@@ -1,7 +1,7 @@
 /**
  * Reading-stats snapshots mirror CrossInk's GlobalReadingStats / BookReadingStats
  * (stats_v5). Each device uploads its own snapshot; snapshots are never merged into
- * each other — the server aggregates across devices on read, same model as the
+ * each other - the server aggregates across devices on read, same model as the
  * firmware's nearby P2P stats sync.
  */
 

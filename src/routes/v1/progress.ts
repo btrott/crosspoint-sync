@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { DB } from '../../db/db.js';
 import { kosyncError, type AppEnv } from '../../auth/middleware.js';
 import { isValidDocument, parseProgressBody, upsertProgress } from '../kosync.js';
+import { fanOutProgress } from '../../connectors/fanout.js';
 
 export function progressRoutes(db: DB): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -19,11 +20,12 @@ export function progressRoutes(db: DB): Hono<AppEnv> {
       return kosyncError(c, 403, parsed.code, parsed.message);
     }
     upsertProgress(db, parsed.record);
+    fanOutProgress(db, user.id, parsed.record.document, parsed.record.percentage, parsed.record.updatedAt, parsed.record.progress, parsed.record.position);
     return c.json({ document: parsed.record.document, timestamp: parsed.record.updatedAt });
   });
 
   // List every synced document with its newest progress (joined with any known
-  // metadata) — lets clients and UIs discover documents without knowing hashes.
+  // metadata) - lets clients and UIs discover documents without knowing hashes.
   app.get('/progress', (c) => {
     const user = c.get('user');
     const limitRaw = Number(c.req.query('limit') ?? 100);

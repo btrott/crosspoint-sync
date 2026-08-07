@@ -374,6 +374,62 @@ weighted by `pace_n`, `start_date` = earliest non-zero, `finished_date` = latest
 `GET /api/v1/documents` lists them. Most clients don't need this endpoint — progress-PUT
 `metadata` capture populates the same table.
 
+### Connectors (master sync hub)
+
+Pair external services (Hardcover, Readwise, …) to the account; reading activity fans out to them
+server-side. See docs/design/sync-hub.md. All under `/api/v1`, same auth headers. Requires the
+server to have `TOKEN_ENC_KEY` set (credentials are encrypted at rest) — otherwise these endpoints
+report `encryption: "disabled"` and linking returns 403.
+
+#### GET /api/v1/connectors
+
+Lists available connectors and this account's link status.
+
+```json
+{
+  "encryption": "enabled",
+  "connectors": [
+    {"id": "hardcover", "name": "Hardcover", "tier": 1, "experimental": false,
+     "carries": ["progress", "finished"], "capabilities": {"read": false, "write": true},
+     "credential_kind": "token", "linked": true, "status": "ok", "account": "julia",
+     "queue": {"pending": 0, "dead": 0}},
+    {"id": "readwise", "name": "Readwise", "tier": 1, "experimental": false,
+     "carries": ["highlight"], "capabilities": {"read": true, "write": true},
+     "credential_kind": "token", "linked": false, "status": null, "account": null}
+  ]
+}
+```
+
+#### PUT /api/v1/connectors/{id}
+
+Link/re-link by validating and storing a credential. Body: `{"credential": { ... }}` — shape is
+connector-specific (`{"token": "..."}` for Hardcover and Readwise). The server validates against the
+service before storing; returns `400` if rejected. `{"id": "hardcover", "linked": true,
+"account": "julia"}` on success.
+
+#### DELETE /api/v1/connectors/{id}
+
+Unlink; wipes the stored credential, all matches, and queued work.
+
+#### GET /api/v1/connectors/{id}/matches
+
+Lists resolved book matches (for a review UI): `{"connector": "hardcover", "matches": [{"document",
+"external_id", "confidence", "source": "auto|manual|none", "query_used", "updated_at"}]}`.
+
+#### PUT /api/v1/connectors/{id}/matches/{document}
+
+Manually set a match (sticky — never auto-recomputed). Body `{"external_id": "42"}`, or
+`{"external_id": null}` to mark "never sync this document".
+
+#### POST /api/v1/connectors/{id}/rematch/{document}
+
+Force (re)matching now; returns the resolved match or null. Preserves manual overrides.
+
+**Matching** is server-side from the document's title/author (the EPUB metadata the firmware sends —
+so connectors need "Send Metadata" on). **Fan-out** is automatic: a progress PUT enqueues a
+progress/finished event to write-connectors that carry it; a clippings PUT enqueues highlight events
+to highlight-connectors (Readwise). A background worker delivers them with retry/backoff.
+
 ### GET /healthz
 
 Unauthenticated. `{"status": "ok", "version": "0.1.0"}`.

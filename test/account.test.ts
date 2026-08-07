@@ -1,0 +1,219 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { makeTestApp, md5, DOC } from './helpers.js';
+import { resetSessionSecretCache } from '../src/auth/session.js';
+
+type App = ReturnType<typeof makeTestApp>['app'];
+
+afterEach(() => resetSessionSecretCache());
+
+async function signup(app: App, handle: string) {
+  return app.request('/auth/signup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ handle }),
+  });
+}
+
+async function signupSession(app: App, handle: string): Promise<{ token: string; cookie: string }> {
+  const res = await signup(app, handle);
+  const body = await res.json();
+  return { token: body.token, cookie: res.headers.get('set-cookie')!.split(';')[0] };
+}
+
+async function createKosync(app: App, cookie: string, username = 'julia', password = 'reader-pw') {
+  const res = await app.request('/account/kosync', {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  return { status: res.status, data: await res.json() };
+}
+
+describe('master (website) account', () => {
+  it('signup issues an xp1_ login token and a session cookie', async () => {
+    const { app } = makeTestApp();
+    const res = await signup(app, 'julia');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.handle).toBe('julia');
+    expect(body.token).toMatch(/^xp1_\d+_[0-9a-f]{32}$/);
+    const cookie = res.headers.get('set-cookie')!.split(';')[0];
+    const me = await app.request('/auth/me', { headers: { cookie } });
+    expect((await me.json()).handle).toBe('julia');
+  });
+
+  it('the master token is NOT a kosync device secret', async () => {
+    const { app } = makeTestApp();
+    const { token } = await signupSession(app, 'julia');
+    const auth = await app.request('/users/auth', {
+      headers: { 'x-auth-user': 'julia', 'x-auth-key': md5(token) },
+    });
+    expect(auth.status).toBe(401);
+  });
+
+  it('login with the token establishes a session', async () => {
+    const { app } = makeTestApp();
+    const { token } = await signupSession(app, 'julia');
+    const login = await app.request('/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    expect(login.status).toBe(200);
+  });
+
+  it('v1 data endpoints return 409 until a kosync account is linked', async () => {
+    const { app } = makeTestApp();
+    const { cookie } = await signupSession(app, 'julia');
+    const res = await app.request('/api/v1/connectors', { headers: { cookie } });
+    expect(res.status).toBe(409);
+  });
+});
+
+describe('kosync account linked under a master account', () => {
+  it('create a kosync account with a chosen password; reader + web both work', async () => {
+    const { app } = makeTestApp();
+    const { cookie } = await signupSession(app, 'julia');
+    const { status, data } = await createKosync(app, cookie, 'julia', 'reader-pw');
+    expect(status).toBe(200);
+    expect(data.username).toBe('julia');
+    expect(data.token).toBeUndefined(); // no auto-generated secret
+    // The chosen password authenticates the reader (device sends MD5(password)).
+    const auth = await app.request('/users/auth', {
+      headers: { 'x-auth-user': 'julia', 'x-auth-key': md5('reader-pw') },
+    });
+    expect(auth.status).toBe(200);
+    const conn = await app.request('/api/v1/connectors', { headers: { cookie } });
+    expect(conn.status).toBe(200);
+  });
+
+  it('rejects create without a password', async () => {
+    const { app } = makeTestApp();
+    const { cookie } = await signupSession(app, 'julia');
+    const res = await app.request('/account/kosync', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'julia' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('kosync status reflects linked state', async () => {
+    const { app } = makeTestApp();
+    const { cookie } = await signupSession(app, 'julia');
+    expect((await (await app.request('/account/kosync', { headers: { cookie } })).json()).linked).toBe(false);
+    await createKosync(app, cookie);
+    const status = await (await app.request('/account/kosync', { headers: { cookie } })).json();
+    expect(status).toMatchObject({ linked: true, username: 'julia' });
+  });
+
+  it('link an existing (device-created) kosync account by password', async () => {
+    const { app } = makeTestApp();
+    const password = 'reader-pass';
+    await app.request('/users/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'reader1', password: md5(password) }),
+    });
+    const { cookie } = await signupSession(app, 'julia');
+    const link = await app.request('/account/kosync', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'reader1', password }),
+    });
+    expect(link.status).toBe(200);
+    expect((await app.request('/api/v1/connectors', { headers: { cookie } })).status).toBe(200);
+  });
+
+  it('rejects linking with a wrong password', async () => {
+    const { app } = makeTestApp();
+    await app.request('/users/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'reader1', password: md5('right') }),
+    });
+    const { cookie } = await signupSession(app, 'julia');
+    const link = await app.request('/account/kosync', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'reader1', password: 'wrong' }),
+    });
+    expect(link.status).toBe(401);
+  });
+
+  it('change password revokes the old one', async () => {
+    const { app } = makeTestApp();
+    const { cookie } = await signupSession(app, 'julia');
+    await createKosync(app, cookie, 'julia', 'oldpw');
+    const res = await app.request('/account/kosync/password', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'newpw' }),
+    });
+    expect(res.status).toBe(200);
+    expect((await app.request('/users/auth', { headers: { 'x-auth-user': 'julia', 'x-auth-key': md5('newpw') } })).status).toBe(200);
+    expect((await app.request('/users/auth', { headers: { 'x-auth-user': 'julia', 'x-auth-key': md5('oldpw') } })).status).toBe(401);
+  });
+
+  it('device sync data is readable from the web session', async () => {
+    const { app } = makeTestApp();
+    const { cookie } = await signupSession(app, 'julia');
+    const { data } = await createKosync(app, cookie, 'julia', 'reader-pw');
+    const headers = { 'x-auth-user': data.username, 'x-auth-key': md5('reader-pw'), 'content-type': 'application/json' };
+    await app.request('/syncs/progress', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.4, device_id: 'd1' }),
+    });
+    const list = await app.request('/api/v1/progress', { headers: { cookie } });
+    expect(list.status).toBe(200);
+    expect((await list.json()).items[0].document).toBe(DOC);
+  });
+
+  it('respects REGISTRATION_DISABLED for master signup', async () => {
+    const { app } = makeTestApp({ registrationDisabled: true });
+    expect((await signup(app, 'nope')).status).toBe(403);
+  });
+});
+
+describe('deletion', () => {
+  it('deletes the kosync account and its data, freeing the username', async () => {
+    const { app } = makeTestApp();
+    const { cookie } = await signupSession(app, 'julia');
+    await createKosync(app, cookie, 'julia', 'pw');
+    // Push some data.
+    const headers = { 'x-auth-user': 'julia', 'x-auth-key': md5('pw'), 'content-type': 'application/json' };
+    await app.request('/syncs/progress', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.4, device_id: 'd1' }),
+    });
+    const del = await app.request('/account/kosync/data', { method: 'DELETE', headers: { cookie } });
+    expect(del.status).toBe(200);
+    // kosync auth no longer works; v1 falls back to 409 (no linked sync).
+    expect((await app.request('/users/auth', { headers })).status).toBe(401);
+    expect((await app.request('/api/v1/connectors', { headers: { cookie } })).status).toBe(409);
+    // Username is free to reuse.
+    const status = await (await app.request('/account/kosync', { headers: { cookie } })).json();
+    expect(status.linked).toBe(false);
+  });
+
+  it('deletes the master account, its kosync account, and clears the session', async () => {
+    const { app } = makeTestApp();
+    const { cookie, token } = await signupSession(app, 'julia');
+    await createKosync(app, cookie, 'julia', 'pw');
+    const del = await app.request('/account', { method: 'DELETE', headers: { cookie } });
+    expect(del.status).toBe(200);
+    // Master login token no longer works.
+    const login = await app.request('/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    expect(login.status).toBe(401);
+    // kosync account is gone too.
+    expect(
+      (await app.request('/users/auth', { headers: { 'x-auth-user': 'julia', 'x-auth-key': md5('pw') } })).status
+    ).toBe(401);
+  });
+});

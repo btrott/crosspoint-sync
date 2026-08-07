@@ -1,5 +1,5 @@
 /**
- * Rich reading position — 1:1 with the firmware's CompactPosition wire struct
+ * Rich reading position - 1:1 with the firmware's CompactPosition wire struct
  * (see CrossInk NearbyBookPositionSyncActivity.h). Page fields are layout hints;
  * pctQ / para / anchor / xpath are the portable parts.
  */

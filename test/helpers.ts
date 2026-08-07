@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { Hono } from 'hono';
-import { createApp } from '../src/app.js';
+import { createApp, type AppOptions } from '../src/app.js';
 import type { Config } from '../src/config.js';
 import { migrate, openDatabase, type DB } from '../src/db/db.js';
 import type { AppEnv } from '../src/auth/middleware.js';
@@ -14,7 +14,10 @@ export interface TestServer {
   db: DB;
 }
 
-export function makeTestApp(configOverrides: Partial<Config> = {}): TestServer {
+export function makeTestApp(
+  configOverrides: Partial<Config> = {},
+  opts: AppOptions = {}
+): TestServer {
   const db = openDatabase(':memory:');
   migrate(db);
   const config: Config = {
@@ -22,7 +25,7 @@ export function makeTestApp(configOverrides: Partial<Config> = {}): TestServer {
     authRateLimitPerMinute: 0, // disabled in tests (limiter state is per-app anyway)
     ...configOverrides,
   };
-  return { app: createApp(db, config), db };
+  return { app: createApp(db, config, opts), db };
 }
 
 let userCounter = 0;

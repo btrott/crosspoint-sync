@@ -11,11 +11,12 @@ import {
 import { hashKey } from '../auth/password.js';
 import { parsePosition } from '../models/position.js';
 import { nowSeconds } from '../models/sync.js';
+import { fanOutProgress } from '../connectors/fanout.js';
 
-const USERNAME_RE = /^[A-Za-z0-9._@+-]{1,64}$/;
+export const USERNAME_RE = /^[A-Za-z0-9._@+-]{1,64}$/;
 
 export function isValidDocument(v: unknown): v is string {
-  // KOReader sends a 32-hex MD5, but the key is opaque — stay lenient.
+  // KOReader sends a 32-hex MD5, but the key is opaque - stay lenient.
   return typeof v === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(v);
 }
 
@@ -188,6 +189,7 @@ export function kosyncRoutes(db: DB, config: Config): Hono<AppEnv> {
       return kosyncError(c, 403, parsed.code, parsed.message);
     }
     upsertProgress(db, parsed.record);
+    fanOutProgress(db, user.id, parsed.record.document, parsed.record.percentage, parsed.record.updatedAt, parsed.record.progress, parsed.record.position);
     return c.json({ document: parsed.record.document, timestamp: parsed.record.updatedAt });
   });
 
