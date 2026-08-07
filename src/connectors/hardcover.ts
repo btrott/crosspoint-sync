@@ -141,6 +141,45 @@ export function extractSearchHits(data: any): Candidate[] {
   return out;
 }
 
+/** Turn a GraphQL/HTTP response into a retry decision, or null if it's fine. */
+function classify(r: { status: number; errors?: { message: string }[] }): PushResult | null {
+  if (r.status === 401 || r.status === 403) {
+    return { ok: false, retryable: false, needsReauth: true, error: 'unauthorized' };
+  }
+  if (r.status === 429) return { ok: false, retryable: true, error: 'rate limited' };
+  if (r.status >= 500) return { ok: false, retryable: true, error: `server ${r.status}` };
+  if (r.errors?.length) return { ok: false, retryable: false, error: r.errors[0].message };
+  return null;
+}
+
+interface Edition {
+  id: number;
+  pages: number;
+}
+
+/** Pick an edition with a page count, following the plugin's priority order. */
+function pickEdition(meUb: any, data: any): Edition | null {
+  const candidates = [
+    meUb?.user_book_reads?.[0]?.edition,
+    meUb?.edition,
+    data?.books_by_pk?.default_ebook_edition,
+    data?.books_by_pk?.default_physical_edition,
+    data?.editions?.[0],
+  ];
+  for (const e of candidates) {
+    if (e && e.id != null && typeof e.pages === 'number' && e.pages > 0) {
+      return { id: Number(e.id), pages: Number(e.pages) };
+    }
+  }
+  return null;
+}
+
+/**
+ * Progress on Hardcover is page-based and lives on a user_book_read (read
+ * session), derived as progress_pages / edition.pages. So: set shelf status,
+ * resolve an edition + page count, convert our percentage to pages, then
+ * insert/update the read session. Modeled on Billiam/hardcoverapp.koplugin.
+ */
 async function push(
   cred: Credential,
   m: Match,
@@ -149,32 +188,97 @@ async function push(
 ): Promise<PushResult> {
   const token = tokenOf(cred);
   const bookId = Number(m.externalId);
-  const finished = ev.kind === 'finished' || (ev.percentage ?? 0) >= 0.999;
-  const status = finished ? STATUS_READ : STATUS_READING;
+  if (!Number.isFinite(bookId)) return { ok: false, retryable: false, error: 'bad book id' };
+  const pct = Math.max(0, Math.min(1, ev.percentage ?? 0));
+  const finished = ev.kind === 'finished' || pct >= 0.999;
+  const statusId = finished ? STATUS_READ : STATUS_READING;
 
-  // GATE: confirm the upsert mutation name/args. Hardcover uses an
-  // insert_user_book / update_user_book pattern keyed by book + status.
-  const mutation = `
-    mutation SetStatus($bookId: Int!, $status: Int!) {
-      insert_user_book(object: { book_id: $bookId, status_id: $status }) {
-        id
-      }
-    }`;
-  const r = await gql(http, token, mutation, { bookId, status });
+  // 1) Set the shelf status (Currently Reading / Read). Best-effort: even if
+  //    this errors because the row already exists, we can still set progress.
+  const ubRes = await gql(
+    http,
+    token,
+    `mutation SetStatus($bookId: Int!, $statusId: Int!) {
+       insert_user_book(object: { book_id: $bookId, status_id: $statusId }) {
+         user_book { id }
+       }
+     }`,
+    { bookId, statusId }
+  );
+  const ubAuth = classify(ubRes);
+  if (ubAuth && !ubAuth.ok && ubAuth.needsReauth) return ubAuth;
+  let userBookId: number | undefined = ubRes.data?.insert_user_book?.user_book?.id;
 
-  if (r.status === 401 || r.status === 403) {
-    return { ok: false, retryable: false, needsReauth: true, error: 'unauthorized' };
+  // 2) Resolve the existing read session + an edition with a page count.
+  const ctx = await gql(
+    http,
+    token,
+    `query Ctx($bookId: Int!) {
+       me {
+         user_books(where: { book_id: { _eq: $bookId } }, limit: 1) {
+           id
+           edition { id pages }
+           user_book_reads(order_by: { id: desc }, limit: 1) { id edition { id pages } }
+         }
+       }
+       books_by_pk(id: $bookId) {
+         default_ebook_edition { id pages }
+         default_physical_edition { id pages }
+       }
+       editions(where: { book_id: { _eq: $bookId } }, order_by: { users_count: desc_nulls_last }, limit: 1) {
+         id pages
+       }
+     }`,
+    { bookId }
+  );
+  const ctxAuth = classify(ctx);
+  if (ctxAuth && !ctxAuth.ok && ctxAuth.needsReauth) return ctxAuth;
+
+  const meUb = ctx.data?.me?.[0]?.user_books?.[0];
+  if (!userBookId) userBookId = meUb?.id;
+  const latestReadId: number | undefined = meUb?.user_book_reads?.[0]?.id;
+  const edition = pickEdition(meUb, ctx.data);
+
+  if (!edition) {
+    // Shelf status is synced, but no edition with a known page count exists, so
+    // Hardcover has no denominator for a percentage. Nothing more we can do.
+    return { ok: true };
   }
-  if (r.status === 429) {
-    return { ok: false, retryable: true, error: 'rate limited' };
+  const progressPages = Math.max(0, Math.min(edition.pages, Math.floor(pct * edition.pages)));
+
+  // 3) Write the read session (update the latest, or create one).
+  let res;
+  if (latestReadId) {
+    res = await gql(
+      http,
+      token,
+      `mutation UpdRead($id: Int!, $pages: Int!, $editionId: Int!) {
+         update_user_book_read(id: $id, object: { progress_pages: $pages, edition_id: $editionId }) {
+           error
+           user_book_read { id }
+         }
+       }`,
+      { id: latestReadId, pages: progressPages, editionId: edition.id }
+    );
+  } else {
+    if (!userBookId) return { ok: false, retryable: true, error: 'no user_book to attach a read to' };
+    res = await gql(
+      http,
+      token,
+      `mutation InsRead($id: Int!, $pages: Int!, $editionId: Int!) {
+         insert_user_book_read(user_book_id: $id, user_book_read: { progress_pages: $pages, edition_id: $editionId }) {
+           error
+           user_book_read { id }
+         }
+       }`,
+      { id: userBookId, pages: progressPages, editionId: edition.id }
+    );
   }
-  if (r.errors?.length) {
-    // GraphQL validation errors won't fix themselves on retry.
-    return { ok: false, retryable: false, error: r.errors[0].message };
-  }
-  if (r.status >= 500) {
-    return { ok: false, retryable: true, error: `server ${r.status}` };
-  }
+  const readAuth = classify(res);
+  if (readAuth) return readAuth;
+  const opError =
+    res.data?.update_user_book_read?.error ?? res.data?.insert_user_book_read?.error;
+  if (opError) return { ok: false, retryable: false, error: String(opError) };
   return { ok: true };
 }
 

@@ -6,6 +6,7 @@ import { drainQueue } from '../src/connectors/runner.js';
 import { claimReady } from '../src/connectors/queue.js';
 import { kosyncConnector, baseUrl } from '../src/connectors/kosync.js';
 import { bookfusionConnector, extractBooks } from '../src/connectors/bookfusion.js';
+import { hardcoverConnector } from '../src/connectors/hardcover.js';
 
 function fakeTransport() {
   const calls: { url: string; method: string; body?: string }[] = [];
@@ -125,6 +126,77 @@ describe('backfill / "Sync now"', () => {
     const { headers } = await registerUser(app);
     const res = await app.request('/api/v1/connectors/kosync/sync', { method: 'POST', headers });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('hardcover progress push', () => {
+  it('sets status and writes a read session with pages = floor(pct * edition.pages)', async () => {
+    const fake = fakeTransport();
+    fake.on('user_books', 200, {
+      data: {
+        me: [{ user_books: [{ id: 10, edition: { id: 5, pages: 400 }, user_book_reads: [] }] }],
+        books_by_pk: { default_ebook_edition: { id: 5, pages: 400 }, default_physical_edition: null },
+        editions: [],
+      },
+    });
+    fake.on('insert_user_book', 200, { data: { insert_user_book: { user_book: { id: 10 } } } });
+    fake.on('insert_user_book_read', 200, {
+      data: { insert_user_book_read: { error: null, user_book_read: { id: 99 } } },
+    });
+
+    const r = await hardcoverConnector.push(
+      { token: 't' },
+      { externalId: '42', confidence: 1 },
+      { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    const readCall = fake.calls.find((c) => c.body?.includes('insert_user_book_read'));
+    expect(readCall).toBeTruthy();
+    expect(readCall!.body).toContain('"pages":200');
+    expect(readCall!.body).toContain('"editionId":5');
+  });
+
+  it('updates the existing read session when one exists', async () => {
+    const fake = fakeTransport();
+    fake.on('user_books', 200, {
+      data: {
+        me: [{ user_books: [{ id: 10, edition: { id: 5, pages: 300 }, user_book_reads: [{ id: 77, edition: { id: 5, pages: 300 } }] }] }],
+        books_by_pk: {},
+        editions: [],
+      },
+    });
+    fake.on('insert_user_book', 200, { data: { insert_user_book: { user_book: { id: 10 } } } });
+    fake.on('update_user_book_read', 200, { data: { update_user_book_read: { error: null, user_book_read: { id: 77 } } } });
+
+    const r = await hardcoverConnector.push(
+      { token: 't' },
+      { externalId: '42', confidence: 1 },
+      { kind: 'progress', document: 'd', percentage: 1, timestamp: 1 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    const upd = fake.calls.find((c) => c.body?.includes('update_user_book_read'));
+    expect(upd!.body).toContain('"id":77');
+    expect(upd!.body).toContain('"pages":300'); // 100% of 300
+  });
+
+  it('still succeeds (status only) when no edition has a page count', async () => {
+    const fake = fakeTransport();
+    fake.on('user_books', 200, { data: { me: [{ user_books: [] }], books_by_pk: {}, editions: [] } });
+    fake.on('insert_user_book', 200, { data: { insert_user_book: { user_book: { id: 10 } } } });
+    const r = await hardcoverConnector.push(
+      { token: 't' },
+      { externalId: '42', confidence: 1 },
+      { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    expect(
+      fake.calls.some(
+        (c) => c.body?.includes('insert_user_book_read') || c.body?.includes('update_user_book_read')
+      )
+    ).toBe(false);
   });
 });
 
