@@ -44,8 +44,9 @@ const STYLE = `
     border-bottom:1px solid rgba(231,229,228,0.8);
     background:rgba(250,250,249,0.8); backdrop-filter:blur(12px);
   }
-  header.site .bar { max-width:64rem; margin:0 auto; padding:14px 20px;
-    display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  header.site .bar { max-width:64rem; margin:0 auto; padding:14px 20px; position:relative;
+    display:flex; align-items:center; justify-content:center; gap:16px; }
+  header.site .bar #logout { position:absolute; right:20px; top:50%; transform:translateY(-50%); }
   .wordmark { display:flex; align-items:center; gap:10px; text-decoration:none; }
   .wordmark img { width:28px; height:28px; border-radius:6px; display:block; }
   .wordmark span { font-family:"Lora",serif; font-weight:600; font-size:16px;
@@ -103,59 +104,146 @@ const STYLE = `
   .foot a { color:var(--stone-500); }
   a { color:var(--brand-600); text-decoration:none; }
   a:hover { text-decoration:underline; }
+
+  /* Faint Free-Ink paper grain across the whole page (behind content). */
+  body::before { content:""; position:fixed; inset:0; z-index:0; pointer-events:none; opacity:0.045;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size:160px 160px; }
+  header.site, .wrap { position:relative; z-index:1; }
+
+  .wrap.wide { max-width:44rem; }
+  .narrow { max-width:24rem; margin:0 auto; }
+  /* hand-lettered "or" divider between the auth cards */
+  .or { display:flex; align-items:center; gap:14px; margin:14px 2px; }
+  .or::before, .or::after { content:""; flex:1; height:0;
+    border-top:2px solid var(--stone-200); border-radius:2px;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 20%,#000 80%,transparent);
+            mask-image:linear-gradient(90deg,transparent,#000 20%,#000 80%,transparent); }
+  .or span { font-family:"Caveat",cursive; font-weight:600; font-size:24px; color:var(--stone-500);
+    transform:rotate(-6deg); line-height:1; }
+  /* soft brand wash behind the hero */
+  .hero { text-align:center; padding:24px 20px 8px; position:relative; border-radius:16px;
+    background:linear-gradient(160deg, var(--stone-50), #fff 55%, var(--brand-50) 130%); }
+  .hero h1 { font-size:38px; }
+  .hero h1 .mark { position:relative; white-space:nowrap; }
+  /* hand-drawn underline under the emphasized word */
+  .hero h1 .mark::after { content:""; position:absolute; left:-2%; right:-2%; bottom:-2px; height:12px;
+    background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 12' preserveAspectRatio='none'%3E%3Cpath d='M2 8 C 45 2, 80 11, 120 6 S 188 3, 198 7' stroke='%234a7a62' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") bottom/100% 100% no-repeat; }
+  .hero .sub { max-width:34rem; margin-left:auto; margin-right:auto; font-size:17px; }
+  /* Caveat hand-lettered eyebrow + annotations */
+  .eyebrow-hand { font-family:"Caveat",cursive; font-weight:600; font-size:22px; color:var(--brand-600);
+    display:inline-block; transform:rotate(-1.5deg); margin:0; }
+  .annotate { display:inline-flex; align-items:center; gap:6px; font-family:"Caveat",cursive;
+    font-weight:600; font-size:19px; color:var(--stone-500); transform:rotate(-2deg); }
+  .annotate svg { width:38px; height:22px; color:var(--stone-400); flex:0 0 auto; }
+  .cta { display:flex; gap:10px; justify-content:center; align-items:center; margin-top:24px; flex-wrap:wrap; }
+  .cta a { text-decoration:none; }
+  .step { display:flex; gap:16px; padding:16px 0; border-top:1px solid var(--stone-200); }
+  .step:first-child { border-top:0; padding-top:4px; }
+  .step .n { flex:0 0 30px; height:30px; border-radius:999px; background:var(--brand-50);
+    color:var(--brand-700); box-shadow:0 0 0 1px var(--brand-100); display:flex;
+    align-items:center; justify-content:center; font-weight:700; font-size:14px; }
+  .step h3 { margin:3px 0 4px; font-size:15px; }
+  .step p { margin:0; color:var(--stone-600); line-height:1.55; }
+  .svc { display:flex; justify-content:space-between; align-items:flex-start; gap:14px;
+    padding:14px 0; border-top:1px solid var(--stone-200); }
+  .svc:first-child { border-top:0; }
+  .svc .name { font-weight:600; }
+  .svc .desc { color:var(--stone-600); font-size:13px; margin-top:2px; line-height:1.5; }
 `;
 
-function shell(title: string, body: string): string {
+function shell(title: string, body: string, wide = false): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · CrossPoint Sync</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="preconnect" href="https://rsms.me/">
 <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=Geist+Mono:wght@400;500&family=Caveat:wght@500;600&display=swap">
 <style>${STYLE}</style></head>
 <body>
 <header class="site"><div class="bar">
-  <a class="wordmark" href="/"><img src="/logo.png" alt=""><span>CrossPoint <span class="accent">Sync</span></span></a>
+  <a class="wordmark" href="https://crosspointreader.com"><img src="/logo.png" alt=""><span>CrossPoint <span class="accent">Sync</span></span></a>
   ${title === 'Account' ? '<button class="ghost" id="logout">Sign out</button>' : ''}
 </div></header>
-<div class="wrap">${body}</div>
+<div class="wrap${wide ? ' wide' : ''}">${body}</div>
 </body></html>`;
 }
 
-const LANDING = shell(
-  'Sign in',
-  `<div class="center">
-     <span class="eyebrow">Sync Hub</span>
-     <h1>Your reading, everywhere</h1>
-     <p class="sub">One account to sync reading progress across your devices and link services like Hardcover, Readwise, and BookFusion.</p>
-   </div>
+const SECTION = 'font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--stone-500);margin:32px 0 12px;';
 
-   <div class="card mt" style="margin-top:32px">
-     <h2>Create account</h2>
-     <label for="su">Choose a handle</label>
-     <input id="su" autocomplete="username" placeholder="e.g. julia" />
-     <button class="primary full mt" id="signup">Create account</button>
-     <div class="err" id="suErr"></div>
-     <div id="tokenBox" hidden>
-       <div class="notice">
-         <p style="margin:0 0 4px"><b>Save your login token now.</b> It won't be shown again.</p>
-         <p class="muted" style="margin:0">This is how you sign into this website. It is not your reader password. You set up your reader sync separately, inside.</p>
-       </div>
-       <code class="token" id="tokenVal"></code>
-       <div class="row">
-         <button class="ghost" id="copyTok">Copy token</button>
-         <a href="/account">Continue &rarr;</a>
-       </div>
+const LANDING = shell(
+  'Sync your reading',
+  `<div class="hero">
+     <p class="eyebrow-hand">read on every device</p>
+     <h1>Your reading, in sync <span class="mark">everywhere</span></h1>
+     <p class="sub">A KOReader-compatible sync server for your e-reader. It keeps your reading progress in sync across devices, and pushes it out to the reading services you already use.</p>
+     <div class="cta">
+       <a href="#get-started"><button class="primary">Get started</button></a>
+       <span class="annotate">
+         <svg viewBox="0 0 40 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M38 20 C 30 22, 18 20, 5 8"/><path d="M5 8 l 0.5 7"/><path d="M5 8 l 7.5 0.5"/></svg>
+         free &amp; open source
+       </span>
      </div>
    </div>
 
+   <h2 id="how" style="${SECTION}margin-top:44px">How it works</h2>
    <div class="card">
-     <h2>Sign in</h2>
-     <label for="li">Login token</label>
-     <input id="li" class="mono" placeholder="xp1_…" autocomplete="current-password" />
-     <button class="primary full mt" id="login">Sign in</button>
-     <div class="err" id="liErr"></div>
+     <div class="step"><div class="n">1</div><div>
+       <h3>Point your reader at CrossPoint Sync</h3>
+       <p>In your reader's KOReader Sync settings, use this server with your sync account. It is standard KOSync, so there is nothing extra to install.</p></div></div>
+     <div class="step"><div class="n">2</div><div>
+       <h3>Just read</h3>
+       <p>Your reading progress and finished books sync to your account automatically, and stay in sync across all your devices.</p></div></div>
+     <div class="step"><div class="n">3</div><div>
+       <h3>Link your services</h3>
+       <p>Connect services like Hardcover and other sync servers. Your reading flows out to them as you go, and "Sync now" backfills the books you have already read.</p></div></div>
+   </div>
+
+   <h2 style="${SECTION}">Services you can link</h2>
+   <div class="card">
+     <div class="svc"><div><div class="name">Another KOSync server</div>
+       <div class="desc">Mirror your progress to sync.koreader.rocks or your own server, so your other KOReader devices stay in sync too.</div></div>
+       <span class="pill">ready</span></div>
+     <div class="svc"><div><div class="name">Hardcover</div>
+       <div class="desc">Keep your Hardcover shelf and reading progress up to date automatically.</div></div>
+       <span class="pill warn">beta</span></div>
+     <div class="svc"><div><div class="name">BookFusion</div>
+       <div class="desc">Sync your reading position to your BookFusion library.</div></div>
+       <span class="pill warn">experimental</span></div>
+     <p style="font-family:'Caveat',cursive;font-weight:600;font-size:19px;color:var(--brand-600);margin:16px 0 0;transform:rotate(-1deg)">more on the way, and it's all open source</p>
+   </div>
+
+   <div class="narrow">
+     <h2 id="get-started" style="${SECTION}text-align:center">Get started</h2>
+     <div class="card">
+       <h2>Create account</h2>
+       <label for="su">Choose a handle</label>
+       <input id="su" autocomplete="username" placeholder="e.g. julia" />
+       <button class="primary full mt" id="signup">Create account</button>
+       <div class="err" id="suErr"></div>
+       <div id="tokenBox" hidden>
+         <div class="notice">
+           <p style="margin:0 0 4px"><b>Save your login token now.</b> It won't be shown again.</p>
+           <p class="muted" style="margin:0">This is how you sign into this website. It is not your reader password. You set up your reader sync separately, inside.</p>
+         </div>
+         <code class="token" id="tokenVal"></code>
+         <div class="row">
+           <button class="ghost" id="copyTok">Copy token</button>
+           <a href="/account">Continue &rarr;</a>
+         </div>
+       </div>
+     </div>
+
+     <div class="or"><span>or</span></div>
+
+     <div class="card">
+       <h2>Sign in</h2>
+       <label for="li">Login token</label>
+       <input id="li" class="mono" placeholder="xp1_…" autocomplete="current-password" />
+       <button class="primary full mt" id="login">Sign in</button>
+       <div class="err" id="liErr"></div>
+     </div>
    </div>
 
    <p class="foot"><a href="https://github.com/crosspoint-reader/crosspoint-sync">Want to self host this?</a></p>
@@ -196,10 +284,9 @@ $('login').onclick = async () => {
   if (!ok) { $('liErr').textContent = data.error || 'Invalid token'; return; }
   location.href = '/account';
 };
-</script>`
+</script>`,
+  true
 );
-
-const SECTION = 'font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--stone-500);margin:32px 0 12px;';
 
 const ACCOUNT = shell(
   'Account',
@@ -345,13 +432,20 @@ async function renderConnectors() {
       ? '<span class="pill ok">'+(c.status==='needs_reauth'?'needs reauth':'linked')+'</span>'
       : (c.experimental ? '<span class="pill warn">experimental</span>' : '<span class="pill">not linked</span>');
     const action = c.linked
-      ? '<button class="ghost" data-unlink="'+c.id+'">Unlink</button>'
+      ? '<div class="row" style="justify-content:flex-end;gap:8px"><button class="ghost" data-sync="'+c.id+'">Sync now</button><button class="ghost" data-unlink="'+c.id+'">Unlink</button></div>'
       : '<button class="primary" data-link="'+c.id+'">Link</button>';
     return '<div class="card"><div class="row"><div><div style="font-weight:600">'+esc(c.name)+' '+badge+
       '</div><div class="muted" style="margin-top:3px">syncs '+esc(c.carries.join(', '))+(c.account?' · '+esc(c.account):'')+'</div></div>'+action+'</div></div>';
   }).join('');
   el.querySelectorAll('[data-unlink]').forEach(b => b.onclick = async () => {
     await jsend('/api/v1/connectors/'+b.dataset.unlink, 'DELETE'); renderConnectors();
+  });
+  el.querySelectorAll('[data-sync]').forEach(b => b.onclick = async () => {
+    const orig = b.textContent; b.disabled = true; b.textContent = 'Syncing…';
+    const r = await jsend('/api/v1/connectors/'+b.dataset.sync+'/sync');
+    b.textContent = r.ok ? ('Queued ' + r.data.queued + ' ✓') : 'Failed';
+    b.classList.toggle('copied', r.ok);
+    setTimeout(() => { b.textContent = orig; b.disabled = false; b.classList.remove('copied'); }, 2000);
   });
   el.querySelectorAll('[data-link]').forEach(b => b.onclick = () => { location.href = '/link/' + b.dataset.link; });
 }

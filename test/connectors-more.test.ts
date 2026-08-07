@@ -88,6 +88,46 @@ describe('kosync mirror fan-out (end to end)', () => {
   });
 });
 
+describe('backfill / "Sync now"', () => {
+  it('enqueues existing progress for a newly linked connector', async () => {
+    const fake = fakeTransport();
+    fake.on('/users/auth', 200, {});
+    const { app, db } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    for (const [doc, pct] of [
+      ['a'.repeat(32), 0.4],
+      ['b'.repeat(32), 0.99],
+    ] as const) {
+      await app.request('/syncs/progress', {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ document: doc, progress: 'p', percentage: pct, device_id: 'd1' }),
+      });
+    }
+    await app.request('/api/v1/connectors/kosync', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ credential: { server: 'mirror.test', username: 'u', password: 'p' } }),
+    });
+    expect(claimReady(db, 10)).toHaveLength(0);
+    const res = await app.request('/api/v1/connectors/kosync/sync', { method: 'POST', headers });
+    expect(res.status).toBe(200);
+    expect((await res.json()).queued).toBe(2);
+    expect(claimReady(db, 10)).toHaveLength(2);
+    fake.on('/syncs/progress', 200, {});
+    await drainQueue(db, fake.transport, 10);
+    expect(fake.calls.filter((c) => c.url.includes('mirror.test') && c.method === 'PUT')).toHaveLength(2);
+  });
+
+  it('sync on an unlinked connector is a 400', async () => {
+    const fake = fakeTransport();
+    const { app } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    const res = await app.request('/api/v1/connectors/kosync/sync', { method: 'POST', headers });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('bookfusion connector', () => {
   it('extractBooks handles the search payload', () => {
     const hits = extractBooks({ books: [{ id: 7, title: 'Foundryside', authors: [{ name: 'Robert Jackson Bennett' }] }] });

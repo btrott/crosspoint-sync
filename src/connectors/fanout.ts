@@ -3,6 +3,7 @@ import { secretsEnabled } from '../crypto/secrets.js';
 import { getConnector } from './registry.js';
 import { enqueue } from './queue.js';
 import { activeConnectorIds } from './store.js';
+import { nowSeconds } from '../models/sync.js';
 import type { OutboundEvent } from './types.js';
 
 /**
@@ -63,4 +64,103 @@ export function fanOutHighlight(
 ): void {
   // Per-clipping coalesce key so distinct highlights on one book each queue.
   fanOut(db, userId, { kind: 'highlight', document, timestamp, highlight: h }, `highlight:${clippingId}`);
+}
+
+/**
+ * Backfill a single connector with everything already synced ("Sync now").
+ * Enqueues the latest progress per document (and highlights, if it carries
+ * them) so a freshly linked service catches up on your history. Coalesce keys
+ * match live fan-out, so a later real sync collapses onto the backfilled event.
+ * Returns the number of items queued.
+ */
+export function backfillConnector(db: DB, userId: number, connectorId: string): number {
+  if (!secretsEnabled()) return 0;
+  const conn = getConnector(connectorId);
+  if (!conn || !conn.capabilities.write) return 0;
+  let queued = 0;
+
+  if (conn.carries.includes('progress') || conn.carries.includes('finished')) {
+    const rows = db
+      .prepare(
+        `SELECT p.document, p.percentage, p.progress, p.position, p.updated_at
+         FROM progress p
+         WHERE p.user_id = ?
+           AND p.updated_at = (
+             SELECT MAX(p2.updated_at) FROM progress p2
+             WHERE p2.user_id = p.user_id AND p2.document = p.document
+           )
+         GROUP BY p.document`
+      )
+      .all(userId) as {
+      document: string;
+      percentage: number;
+      progress: string;
+      position: string | null;
+      updated_at: number;
+    }[];
+    for (const r of rows) {
+      const finished = r.percentage >= 0.98;
+      const kind = finished ? 'finished' : 'progress';
+      if (!conn.carries.includes(kind)) continue;
+      let position: Record<string, unknown> | null = null;
+      if (r.position) {
+        try {
+          position = JSON.parse(r.position) as Record<string, unknown>;
+        } catch {
+          position = null;
+        }
+      }
+      enqueue(db, userId, connectorId, {
+        kind,
+        document: r.document,
+        percentage: r.percentage,
+        progress: r.progress,
+        position,
+        timestamp: r.updated_at,
+      });
+      queued++;
+    }
+  }
+
+  if (conn.carries.includes('highlight')) {
+    const rows = db
+      .prepare(
+        `SELECT c.id, c.document, c.text, c.note, c.created_at, d.title, d.author
+         FROM clippings c
+         LEFT JOIN documents d ON d.user_id = c.user_id AND d.document = c.document
+         WHERE c.user_id = ? AND c.deleted = 0`
+      )
+      .all(userId) as {
+      id: string;
+      document: string;
+      text: string;
+      note: string | null;
+      created_at: number;
+      title: string | null;
+      author: string | null;
+    }[];
+    for (const r of rows) {
+      enqueue(
+        db,
+        userId,
+        connectorId,
+        {
+          kind: 'highlight',
+          document: r.document,
+          timestamp: r.created_at || nowSeconds(),
+          highlight: {
+            text: r.text,
+            note: r.note,
+            title: r.title,
+            author: r.author,
+            highlightedAt: r.created_at > 0 ? r.created_at : null,
+          },
+        },
+        `highlight:${r.id}`
+      );
+      queued++;
+    }
+  }
+
+  return queued;
 }

@@ -4,6 +4,7 @@ import { kosyncError, type AppEnv } from '../../auth/middleware.js';
 import { secretsEnabled } from '../../crypto/secrets.js';
 import { fetchTransport, getConnector, listConnectors } from '../../connectors/registry.js';
 import { purgeConnector, queueDepth } from '../../connectors/queue.js';
+import { backfillConnector } from '../../connectors/fanout.js';
 import { resolveMatch } from '../../connectors/runner.js';
 import {
   deleteAccount,
@@ -129,6 +130,18 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
     } catch (err) {
       return c.json({ status: 'error', error: err instanceof Error ? err.message : 'poll failed' }, 502);
     }
+  });
+
+  // "Sync now": backfill this connector with everything already synced.
+  app.post('/connectors/:id/sync', (c) => {
+    const conn = getConnector(c.req.param('id'));
+    if (!conn) return c.json({ code: 2003, message: 'Unknown connector' }, 404);
+    const user = c.get('user');
+    if (!getAccount(db, user.id, conn.id)) {
+      return c.json({ code: 2003, message: 'Connector not linked' }, 400);
+    }
+    const queued = backfillConnector(db, user.id, conn.id);
+    return c.json({ queued });
   });
 
   // Unlink and wipe queued work + matches.
