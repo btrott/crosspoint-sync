@@ -97,7 +97,9 @@ async function match(cred: Credential, doc: DocumentMeta, http: HttpTransport): 
   if (!c) return null;
   const ta = extractTitleAuthor(doc);
   if (!ta) return null;
-  const q = `${ta.title} ${ta.author}`.trim();
+  // ABS search matches best on the title alone; author is only used to score
+  // and disambiguate the results (searching "title author" returns little).
+  const q = ta.title.trim();
 
   const libIds = await bookLibraryIds(http, c);
   const candidates: (Candidate & { duration?: number })[] = [];

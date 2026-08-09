@@ -95,6 +95,7 @@ const STYLE = `
   .pill.warn { color:#9a7a2e; box-shadow:0 0 0 1px #ecdcae; background:#faf5e6; }
   .unlink-link { font-size:12px; font-weight:600; color:var(--stone-400); text-decoration:none; margin-left:2px; }
   .unlink-link:hover { color:#b91c1c; text-decoration:underline; }
+  .grp { font-size:12px; text-transform:uppercase; letter-spacing:0.04em; color:var(--stone-400); margin:12px 0 4px; }
 
   code.token { display:block; margin:12px 0; padding:12px 14px; background:var(--stone-50);
     box-shadow:0 0 0 1px var(--stone-200); border-radius:8px; font-family:"Geist Mono",monospace;
@@ -113,7 +114,7 @@ const STYLE = `
     background-size:160px 160px; }
   header.site, .wrap { position:relative; z-index:1; }
 
-  .wrap.wide { max-width:44rem; }
+  .wrap.wide { max-width:48rem; }
   .narrow { max-width:24rem; margin:0 auto; }
   /* hand-lettered "or" divider between the auth cards */
   .or { display:flex; align-items:center; gap:14px; margin:14px 2px; }
@@ -455,7 +456,7 @@ async function renderConnectors() {
   el.innerHTML = data.connectors.map(c => {
     const badge = c.linked
       ? (c.status==='needs_reauth' ? '<span class="pill warn">needs reauth</span> ' : '') + '<a href="#" class="unlink-link" data-unlink="'+c.id+'">unlink</a>'
-      : (c.experimental ? '<span class="pill warn">experimental</span>' : '<span class="pill">not linked</span>');
+      : (c.experimental ? '<span class="pill warn">experimental</span>' : '');
     const action = c.linked
       ? '<div class="row" style="justify-content:flex-end;gap:8px"><button class="ghost" data-review="'+c.id+'">Matches</button><button class="ghost" data-sync="'+c.id+'">Sync now</button></div>'
       : '<button class="primary" data-link="'+c.id+'">Link</button>';
@@ -490,7 +491,8 @@ $('delAccount').onclick = async () => {
   if (!confirm('Are you absolutely sure? Everything will be erased.')) return;
   await jsend('/account', 'DELETE'); location.href = '/';
 };
-</script>`
+</script>`,
+  true
 );
 
 const LINK = shell(
@@ -606,7 +608,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&am
 async function jget(u){ const r = await fetch(u); return { ok:r.ok, status:r.status, data: await r.json().catch(()=>({})) }; }
 async function jsend(u, m='PUT', body){ const r = await fetch(u,{method:m,headers:body?{'content-type':'application/json'}:undefined, body: body?JSON.stringify(body):undefined}); return { ok:r.ok, data: await r.json().catch(()=>({})) }; }
 
-let CONN = null, CANDIDATES = [];
+let CONN = null, CANDIDATES = [], BOOKS = [];
 
 (async () => {
   const list = await jget('/api/v1/connectors');
@@ -624,7 +626,8 @@ async function renderList() {
   const { ok, data } = await jget('/api/v1/connectors/' + ID + '/review');
   const el = $('list');
   if (!ok) { el.innerHTML = '<p class="muted">Could not load.</p>'; return; }
-  if (!data.books.length) { el.innerHTML = '<div class="card"><p class="muted" style="margin:0">No synced books yet. Read something on your device first.</p></div>'; return; }
+  BOOKS = data.books || [];
+  if (!BOOKS.length) { el.innerHTML = '<div class="card"><p class="muted" style="margin:0">No synced books yet. Read something on your device first.</p></div>'; return; }
   el.innerHTML = data.books.map(b => {
     const name = b.title ? esc(b.title) + (b.author ? ' <span class="muted">· ' + esc(b.author) + '</span>' : '') : '<span class="mono">' + esc(b.document.slice(0,12)) + '…</span>';
     const state = b.matched
@@ -642,22 +645,31 @@ function openPicker(doc) {
   const box = $('pick-' + doc);
   if (!box.hidden) { box.hidden = true; return; }
   box.hidden = false;
+  const book = BOOKS.find(b => b.document === doc);
   const opts = CANDIDATES.map(c => optionRow(doc, c)).join('');
-  box.innerHTML = (opts ? '<div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Currently reading</div>' + opts : '')
-    + '<div style="display:flex;gap:8px;margin-top:10px"><input placeholder="search ' + esc(CONN.name) + '…" id="q-' + doc + '" style="flex:1"><button class="ghost" data-search="' + doc + '">Search</button></div>'
-    + '<div id="results-' + doc + '"></div>'
+  box.innerHTML = (opts ? '<div class="grp">Currently reading</div>' + opts : '')
+    + '<div id="results-' + doc + '"><div class="grp">Suggestions</div><p class="muted" style="margin:2px 0 0">Searching…</p></div>'
+    + '<div style="display:flex;gap:8px;margin-top:12px"><input placeholder="search ' + esc(CONN.name) + '…" id="q-' + doc + '" style="flex:1"><button class="ghost" data-search="' + doc + '">Search</button></div>'
     + '<button class="ghost mt" data-nomatch="' + doc + '">Don\\'t sync this book</button>';
   box.querySelectorAll('[data-choose]').forEach(bindChoose);
-  box.querySelector('[data-search]').onclick = async () => {
-    const q = $('q-' + doc).value.trim(); if (!q) return;
-    const r = await jget('/api/v1/connectors/' + ID + '/search?q=' + encodeURIComponent(q));
-    $('results-' + doc).innerHTML = (r.data.books || []).map(c => optionRow(doc, c)).join('') || '<p class="muted" style="margin:8px 0 0">No results.</p>';
-    $('results-' + doc).querySelectorAll('[data-choose]').forEach(bindChoose);
-  };
+  box.querySelector('[data-search]').onclick = () => runSearch(doc, $('q-' + doc).value.trim());
   box.querySelector('[data-nomatch]').onclick = async () => {
     await jsend('/api/v1/connectors/' + ID + '/matches/' + doc, 'PUT', { external_id: null });
     renderList();
   };
+  // Auto-suggest from the whole library using the book's own title.
+  if (book && book.title) { $('q-' + doc).value = book.title; runSearch(doc, book.title, true); }
+  else { $('results-' + doc).innerHTML = ''; }
+}
+
+async function runSearch(doc, q, isAuto) {
+  if (!q) return;
+  const res = $('results-' + doc);
+  res.innerHTML = '<div class="grp">' + (isAuto ? 'Suggestions' : 'Results') + '</div><p class="muted" style="margin:2px 0 0">Searching…</p>';
+  const r = await jget('/api/v1/connectors/' + ID + '/search?q=' + encodeURIComponent(q));
+  const rows = (r.data.books || []).map(c => optionRow(doc, c)).join('');
+  res.innerHTML = '<div class="grp">' + (isAuto ? 'Suggestions' : 'Results') + '</div>' + (rows || '<p class="muted" style="margin:2px 0 0">No matches found.</p>');
+  res.querySelectorAll('[data-choose]').forEach(bindChoose);
 }
 
 function optionRow(doc, c) {
