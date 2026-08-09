@@ -208,6 +208,9 @@ const LANDING = shell(
      <div class="svc"><div><div class="name">Hardcover</div>
        <div class="desc">Keep your Hardcover shelf and reading progress up to date automatically.</div></div>
        <span class="pill warn">beta</span></div>
+     <div class="svc"><div><div class="name">Audiobookshelf</div>
+       <div class="desc">Keep your place between the ebook and the audiobook, both ways. Read some, then pick up listening right where you left off.</div></div>
+       <span class="pill">ready</span></div>
      <div class="svc"><div><div class="name">BookFusion</div>
        <div class="desc">Sync your reading position to your BookFusion library.</div></div>
        <span class="pill warn">experimental</span></div>

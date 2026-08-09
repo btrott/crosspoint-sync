@@ -11,10 +11,17 @@ import type { OutboundEvent } from './types.js';
  * event's kind. Best-effort and synchronous-but-cheap (DB inserts only); the
  * queue worker does the network I/O. Never throws into the request path.
  */
-function fanOut(db: DB, userId: number, ev: OutboundEvent, coalesceKey?: string): void {
+function fanOut(
+  db: DB,
+  userId: number,
+  ev: OutboundEvent,
+  coalesceKey?: string,
+  exceptConnectorId?: string
+): void {
   if (!secretsEnabled()) return;
   try {
     for (const connectorId of activeConnectorIds(db, userId)) {
+      if (connectorId === exceptConnectorId) continue; // loop suppression: don't echo to the source
       const conn = getConnector(connectorId);
       if (!conn || !conn.capabilities.write || !conn.carries.includes(ev.kind)) continue;
       enqueue(db, userId, connectorId, ev, coalesceKey);
@@ -33,7 +40,8 @@ export function fanOutProgress(
   percentage: number,
   timestamp: number,
   progress?: string,
-  positionJson?: string | null
+  positionJson?: string | null,
+  exceptConnectorId?: string
 ): void {
   const finished = percentage >= 0.98;
   let position: Record<string, unknown> | null = null;
@@ -44,14 +52,20 @@ export function fanOutProgress(
       position = null;
     }
   }
-  fanOut(db, userId, {
-    kind: finished ? 'finished' : 'progress',
-    document,
-    percentage,
-    progress,
-    position,
-    timestamp,
-  });
+  fanOut(
+    db,
+    userId,
+    {
+      kind: finished ? 'finished' : 'progress',
+      document,
+      percentage,
+      progress,
+      position,
+      timestamp,
+    },
+    undefined,
+    exceptConnectorId
+  );
 }
 
 export function fanOutHighlight(

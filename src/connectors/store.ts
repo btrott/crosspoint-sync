@@ -180,6 +180,56 @@ export function backfillDocumentMeta(
   ).run(userId, document, title ?? null, author ?? null, now);
 }
 
+export function getPullCursor(db: DB, userId: number, connectorId: string): number {
+  const row = db
+    .prepare('SELECT pull_cursor FROM connector_accounts WHERE user_id = ? AND connector_id = ?')
+    .get(userId, connectorId) as { pull_cursor: number } | undefined;
+  return row?.pull_cursor ?? 0;
+}
+
+export function setPullCursor(
+  db: DB,
+  userId: number,
+  connectorId: string,
+  cursor: number
+): void {
+  db.prepare(
+    'UPDATE connector_accounts SET pull_cursor = ? WHERE user_id = ? AND connector_id = ?'
+  ).run(cursor, userId, connectorId);
+}
+
+/** Reverse-lookup: which of our documents is matched to this connector book id. */
+export function documentForExternal(
+  db: DB,
+  userId: number,
+  connectorId: string,
+  externalId: string
+): string | null {
+  const row = db
+    .prepare(
+      'SELECT document FROM connector_matches WHERE user_id = ? AND connector_id = ? AND external_id = ? LIMIT 1'
+    )
+    .get(userId, connectorId, externalId) as { document: string } | undefined;
+  return row?.document ?? null;
+}
+
+/** The newest stored progress percentage for a document (any device), or null. */
+export function latestPercentage(db: DB, userId: number, document: string): number | null {
+  const row = db
+    .prepare(
+      'SELECT percentage FROM progress WHERE user_id = ? AND document = ? ORDER BY updated_at DESC LIMIT 1'
+    )
+    .get(userId, document) as { percentage: number } | undefined;
+  return row?.percentage ?? null;
+}
+
+/** All linked, enabled connector accounts across users (for the fan-in worker). */
+export function listAllEnabledAccounts(db: DB): { user_id: number; connector_id: string }[] {
+  return db
+    .prepare(`SELECT user_id, connector_id FROM connector_accounts WHERE enabled = 1 AND status != 'error'`)
+    .all() as { user_id: number; connector_id: string }[];
+}
+
 export function documentMeta(db: DB, userId: number, document: string): DocumentMeta {
   const row = db
     .prepare('SELECT title, author, filename FROM documents WHERE user_id = ? AND document = ?')

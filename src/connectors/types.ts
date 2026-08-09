@@ -55,6 +55,17 @@ export interface ExternalBook {
   edition?: string | null;
 }
 
+/** A position change pulled FROM a connector (fan-in / bidirectional sync). */
+export interface InboundChange {
+  /** The connector's book id (maps back to our document via the match table). */
+  externalId: string;
+  /** 0..1 reading fraction. */
+  percentage: number;
+  finished: boolean;
+  /** Source last-update timestamp, ms epoch — used as the poll cursor. */
+  updatedAtMs: number;
+}
+
 /** A canonical reading event to fan out to a connector. */
 export interface OutboundEvent {
   kind: DataKind;
@@ -139,6 +150,13 @@ export interface Connector {
 
   /** Free-text catalog search for the manual-match picker. Optional. */
   search?(cred: Credential, query: string, http: HttpTransport): Promise<ExternalBook[]>;
+
+  /**
+   * Pull position changes since a cursor (ms epoch), for bidirectional sync.
+   * Only read-capable connectors implement it. The runner maps each change back
+   * to a document and writes it into canonical progress. Optional.
+   */
+  pullChanges?(cred: Credential, http: HttpTransport, sinceMs: number): Promise<InboundChange[]>;
 
   /** Begin an interactive device-code link (OAuth device grant). Optional. */
   beginLink?(http: HttpTransport): Promise<DeviceLinkStart>;

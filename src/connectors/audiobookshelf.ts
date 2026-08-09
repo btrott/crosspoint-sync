@@ -5,6 +5,7 @@ import type {
   DocumentMeta,
   ExternalBook,
   HttpTransport,
+  InboundChange,
   Match,
   OutboundEvent,
   PushResult,
@@ -167,6 +168,36 @@ async function resolveDuration(http: HttpTransport, c: AbsCred, m: Match): Promi
   return typeof d === 'number' && d > 0 ? d : null;
 }
 
+/**
+ * Pull listening-position changes for bidirectional sync: read the user's media
+ * progress and emit anything updated since the cursor. ABS derives `progress`
+ * from currentTime/duration, so it maps straight back to a reading percentage.
+ */
+async function pullChanges(cred: Credential, http: HttpTransport, sinceMs: number): Promise<InboundChange[]> {
+  const c = parseCred(cred);
+  if (!c) return [];
+  const r = await absGet(http, c, '/api/me');
+  const mp = Array.isArray(r.body?.mediaProgress) ? r.body.mediaProgress : [];
+  const out: InboundChange[] = [];
+  for (const p of mp) {
+    if (p?.episodeId) continue; // books only, not podcast episodes
+    const lu = typeof p?.lastUpdate === 'number' ? p.lastUpdate : 0;
+    if (lu <= sinceMs) continue;
+    let pct = typeof p?.progress === 'number' ? p.progress : 0;
+    if (!pct && typeof p?.currentTime === 'number' && typeof p?.duration === 'number' && p.duration > 0) {
+      pct = p.currentTime / p.duration;
+    }
+    if (p?.libraryItemId == null) continue;
+    out.push({
+      externalId: String(p.libraryItemId),
+      percentage: Math.max(0, Math.min(1, pct)),
+      finished: !!p?.isFinished,
+      updatedAtMs: lu,
+    });
+  }
+  return out;
+}
+
 async function push(
   cred: Credential,
   m: Match,
@@ -212,4 +243,5 @@ export const audiobookshelfConnector: Connector = {
   push,
   listCurrentlyReading,
   search,
+  pullChanges,
 };

@@ -8,6 +8,8 @@ import { kosyncConnector, baseUrl } from '../src/connectors/kosync.js';
 import { bookfusionConnector, extractBooks } from '../src/connectors/bookfusion.js';
 import { hardcoverConnector } from '../src/connectors/hardcover.js';
 import { audiobookshelfConnector, baseUrl as absBaseUrl } from '../src/connectors/audiobookshelf.js';
+import { pollConnector } from '../src/connectors/fanin.js';
+import { saveMatch } from '../src/connectors/store.js';
 
 function fakeTransport() {
   const calls: { url: string; method: string; body?: string }[] = [];
@@ -148,6 +150,84 @@ describe('audiobookshelf connector', () => {
     expect(r.ok).toBe(true);
     const body = JSON.parse(fake.calls.find((c) => c.url.includes('/api/me/progress/li_1'))!.body!);
     expect(body).toMatchObject({ currentTime: 1000, duration: 1000, isFinished: true });
+  });
+});
+
+describe('audiobookshelf fan-in (audiobook -> ebook)', () => {
+  const CRED = { server: 'abs.test', token: 'k' };
+
+  it('pullChanges emits book progress updated since the cursor', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/me', 200, {
+      mediaProgress: [
+        { libraryItemId: 'li_1', progress: 0.6, isFinished: false, lastUpdate: 2000, episodeId: null },
+        { libraryItemId: 'li_old', progress: 0.2, isFinished: false, lastUpdate: 500, episodeId: null },
+        { libraryItemId: 'ep_x', progress: 0.9, isFinished: false, lastUpdate: 3000, episodeId: 'ep_x' },
+      ],
+    });
+    const changes = await audiobookshelfConnector.pullChanges!(CRED, fake.transport, 1000);
+    // Only li_1 (newer than cursor, and a book not a podcast episode).
+    expect(changes).toEqual([{ externalId: 'li_1', percentage: 0.6, finished: false, updatedAtMs: 2000 }]);
+  });
+
+  it('poller writes the audiobook position to canonical progress and fans out to others (not ABS)', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/me', 200, { username: 'julia' });
+    const { app, db } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    const userId = 1;
+    // Link ABS and a second write connector (kosync mirror) to receive fan-out.
+    await app.request('/api/v1/connectors/audiobookshelf', {
+      method: 'PUT', headers, body: JSON.stringify({ credential: { server: 'abs.test', token: 'k' } }),
+    });
+    fake.on('/users/auth', 200, {});
+    await app.request('/api/v1/connectors/kosync', {
+      method: 'PUT', headers, body: JSON.stringify({ credential: { server: 'mirror.test', username: 'u', password: 'p' } }),
+    });
+    // Pre-seed the ABS match: our DOC <-> ABS library item li_1.
+    saveMatch(db, userId, 'audiobookshelf', DOC, { externalId: 'li_1', confidence: 1 }, 'manual');
+    // Device is at 20%; ABS (audiobook) advanced to 60%.
+    await app.request('/syncs/progress', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.2, device_id: 'reader' }),
+    });
+    fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.6, isFinished: false, lastUpdate: 5000, episodeId: null }] });
+    // Clear whatever the device's own 0.2% sync queued, so we only observe fan-in.
+    db.prepare('DELETE FROM connector_queue').run();
+
+    const applied = await pollConnector(db, userId, 'audiobookshelf', fake.transport);
+    expect(applied).toBe(1);
+
+    // Canonical progress now reflects the audiobook position (newest wins).
+    const got = await (await app.request(`/syncs/progress/${DOC}`, { headers })).json();
+    expect(got.percentage).toBe(0.6);
+    expect(got.device_id).toBe('audiobookshelf');
+
+    // Fan-out queued to the OTHER connector (kosync mirror), not back to ABS.
+    const queued = db.prepare('SELECT connector_id FROM connector_queue WHERE user_id = ?').all(userId) as { connector_id: string }[];
+    const targets = queued.map((q) => q.connector_id);
+    expect(targets).toContain('kosync');
+    expect(targets).not.toContain('audiobookshelf');
+  });
+
+  it('epsilon-suppresses an echo of our own pushed value', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/me', 200, { username: 'julia' });
+    const { app, db } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    const userId = 1;
+    await app.request('/api/v1/connectors/audiobookshelf', {
+      method: 'PUT', headers, body: JSON.stringify({ credential: { server: 'abs.test', token: 'k' } }),
+    });
+    saveMatch(db, userId, 'audiobookshelf', DOC, { externalId: 'li_1', confidence: 1 }, 'manual');
+    // Our stored progress is 0.40; ABS reports 0.401 (an echo of what we pushed).
+    await app.request('/syncs/progress', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.4, device_id: 'reader' }),
+    });
+    fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.401, isFinished: false, lastUpdate: 9000, episodeId: null }] });
+    const applied = await pollConnector(db, userId, 'audiobookshelf', fake.transport);
+    expect(applied).toBe(0); // within epsilon -> ignored
   });
 });
 
