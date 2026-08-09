@@ -151,6 +151,42 @@ describe('audiobookshelf connector', () => {
     const body = JSON.parse(fake.calls.find((c) => c.url.includes('/api/me/progress/li_1'))!.body!);
     expect(body).toMatchObject({ currentTime: 1000, duration: 1000, isFinished: true });
   });
+
+  it('still updates progress when no duration can be resolved', async () => {
+    const fake = fakeTransport();
+    // Item lookup returns no duration and no audio files.
+    fake.on('/api/items/li_1', 200, { media: {} });
+    fake.on('/api/me/progress/li_1', 200, {});
+    const r = await audiobookshelfConnector.push(
+      CRED,
+      { externalId: 'li_1', externalEdition: null, confidence: 1 },
+      { kind: 'progress', document: 'd', percentage: 0.42, timestamp: 1 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    const call = fake.calls.find((c) => c.url.includes('/api/me/progress/li_1'));
+    expect(call?.method).toBe('PATCH');
+    const body = JSON.parse(call!.body!);
+    // Sends the progress fraction directly; omits currentTime/duration.
+    expect(body).toMatchObject({ progress: 0.42, isFinished: false });
+    expect(body.duration).toBeUndefined();
+    expect(body.currentTime).toBeUndefined();
+  });
+
+  it('sums audio file durations when media.duration is absent', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/items/li_1', 200, { media: { audioFiles: [{ duration: 600 }, { duration: 400 }] } });
+    fake.on('/api/me/progress/li_1', 200, {});
+    const r = await audiobookshelfConnector.push(
+      CRED,
+      { externalId: 'li_1', externalEdition: null, confidence: 1 },
+      { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    const body = JSON.parse(fake.calls.find((c) => c.url.includes('/api/me/progress/li_1'))!.body!);
+    expect(body).toMatchObject({ currentTime: 500, duration: 1000, progress: 0.5 });
+  });
 });
 
 describe('audiobookshelf fan-in (audiobook -> ebook)', () => {

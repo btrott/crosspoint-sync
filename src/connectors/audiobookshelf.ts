@@ -165,9 +165,14 @@ async function search(cred: Credential, query: string, http: HttpTransport): Pro
 async function resolveDuration(http: HttpTransport, c: AbsCred, m: Match): Promise<number | null> {
   const cached = m.externalEdition ? Number(m.externalEdition) : NaN;
   if (Number.isFinite(cached) && cached > 0) return cached;
-  const r = await absGet(http, c, `/api/items/${encodeURIComponent(m.externalId)}`);
-  const d = r.body?.media?.duration;
-  return typeof d === 'number' && d > 0 ? d : null;
+  const r = await absGet(http, c, `/api/items/${encodeURIComponent(m.externalId)}?expanded=1`);
+  const media = r.body?.media;
+  const d = media?.duration;
+  if (typeof d === 'number' && d > 0) return d;
+  // Fall back to summing the audio files (older ABS items omit media.duration).
+  const files = Array.isArray(media?.audioFiles) ? media.audioFiles : [];
+  const sum = files.reduce((acc: number, f: any) => acc + (typeof f?.duration === 'number' ? f.duration : 0), 0);
+  return sum > 0 ? sum : null;
 }
 
 /**
@@ -211,17 +216,21 @@ async function push(
   const pct = Math.max(0, Math.min(1, ev.percentage ?? 0));
   const finished = ev.kind === 'finished' || pct >= 0.999;
 
+  // ABS accepts a `progress` fraction directly, so we can always update the
+  // reading position even when we can't resolve the audiobook duration. When we
+  // DO know the duration we also send currentTime/duration so the app seeks to
+  // the right spot in the audio.
   const duration = await resolveDuration(http, c, m);
-  if (!duration) {
-    // No known duration -> can't map percentage to a listening position.
-    return { ok: true };
+  const payload: Record<string, unknown> = { progress: finished ? 1 : pct, isFinished: finished };
+  if (duration) {
+    payload.duration = duration;
+    payload.currentTime = Math.max(0, Math.min(duration, pct * duration));
   }
-  const currentTime = Math.max(0, Math.min(duration, pct * duration));
 
   const res = await http(`${baseUrl(c.server)}/api/me/progress/${encodeURIComponent(m.externalId)}`, {
     method: 'PATCH',
     headers: authHeaders(c.token),
-    body: JSON.stringify({ currentTime, duration, isFinished: finished }),
+    body: JSON.stringify(payload),
   });
   if (res.status === 401 || res.status === 403) {
     return { ok: false, retryable: false, needsReauth: true, error: 'unauthorized' };
