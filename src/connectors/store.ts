@@ -155,6 +155,31 @@ export function listMatches(db: DB, userId: number, connectorId: string): MatchR
     .all(userId, connectorId) as unknown as MatchRow[];
 }
 
+/**
+ * Fill in a document's title/author from a resolved match, but only where they
+ * are currently missing — never overwrite metadata the device sent. This is how
+ * a match (or a manual pick) durably teaches us a book's identity, so later
+ * metadata-less syncs (e.g. from another device) still match. See docs/design.
+ */
+export function backfillDocumentMeta(
+  db: DB,
+  userId: number,
+  document: string,
+  title: string | null | undefined,
+  author: string | null | undefined,
+  now = nowSeconds()
+): void {
+  if (!title && !author) return;
+  db.prepare(
+    `INSERT INTO documents (user_id, document, title, author, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, document) DO UPDATE SET
+       title = COALESCE(documents.title, excluded.title),
+       author = COALESCE(documents.author, excluded.author),
+       updated_at = excluded.updated_at`
+  ).run(userId, document, title ?? null, author ?? null, now);
+}
+
 export function documentMeta(db: DB, userId: number, document: string): DocumentMeta {
   const row = db
     .prepare('SELECT title, author, filename FROM documents WHERE user_id = ? AND document = ?')

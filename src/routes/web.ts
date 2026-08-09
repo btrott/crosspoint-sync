@@ -239,10 +239,19 @@ const LANDING = shell(
 
      <div class="card">
        <h2>Sign in</h2>
-       <label for="li">Login token</label>
-       <input id="li" class="mono" placeholder="xp1_…" autocomplete="current-password" />
-       <button class="primary full mt" id="login">Sign in</button>
-       <div class="err" id="liErr"></div>
+       <label for="ksu">Sync username</label>
+       <input id="ksu" autocomplete="username" placeholder="your reader sync username" />
+       <label for="ksp" style="margin-top:10px">Sync password</label>
+       <input id="ksp" type="password" autocomplete="current-password" />
+       <button class="primary full mt" id="ksLogin">Sign in</button>
+       <div class="err" id="ksLoginErr"></div>
+       <p class="muted" style="margin-top:14px"><a href="#" id="tokToggle">Have a login token instead?</a></p>
+       <div id="tokBox" hidden style="margin-top:6px">
+         <label for="li">Login token</label>
+         <input id="li" class="mono" placeholder="xp1_…" autocomplete="off" />
+         <button class="ghost full mt" id="login">Sign in with token</button>
+         <div class="err" id="liErr"></div>
+       </div>
      </div>
    </div>
 
@@ -278,6 +287,13 @@ async function copyWithFeedback(btn, text) {
   setTimeout(() => { btn.textContent = original; btn.classList.remove('copied'); btn.disabled = false; }, 1600);
 }
 $('copyTok').onclick = () => copyWithFeedback($('copyTok'), $('tokenVal').textContent);
+$('ksLogin').onclick = async () => {
+  $('ksLoginErr').textContent = '';
+  const { ok, data } = await post('/auth/login-kosync', { username: $('ksu').value.trim(), password: $('ksp').value });
+  if (!ok) { $('ksLoginErr').textContent = data.error || 'Invalid credentials'; return; }
+  location.href = '/account';
+};
+$('tokToggle').onclick = (e) => { e.preventDefault(); $('tokBox').hidden = !$('tokBox').hidden; };
 $('login').onclick = async () => {
   $('liErr').textContent = '';
   const { ok, data } = await post('/auth/login', { token: $('li').value.trim() });
@@ -299,6 +315,10 @@ const ACCOUNT = shell(
    <div id="kosync"><p class="muted">Loading…</p></div>
 
    <h2 style="${SECTION}">Linked services</h2>
+   <div class="notice" style="margin-bottom:12px">
+     <p style="margin:0 0 4px"><b>One-time setup:</b> turn on <b>Send Document Metadata</b> in your reader.</p>
+     <p class="muted" style="margin:0">On CrossPoint: Settings &rarr; KOReader Sync &rarr; Send Document Metadata &rarr; On. This lets us match your books to these services by title and author. Without it, new books can't be matched automatically (you can still match them by hand under Matches).</p>
+   </div>
    <div id="connectors"><p class="muted">Loading…</p></div>
 
    <h2 style="${SECTION}">Website login</h2>
@@ -432,7 +452,7 @@ async function renderConnectors() {
       ? '<span class="pill ok">'+(c.status==='needs_reauth'?'needs reauth':'linked')+'</span>'
       : (c.experimental ? '<span class="pill warn">experimental</span>' : '<span class="pill">not linked</span>');
     const action = c.linked
-      ? '<div class="row" style="justify-content:flex-end;gap:8px"><button class="ghost" data-sync="'+c.id+'">Sync now</button><button class="ghost" data-unlink="'+c.id+'">Unlink</button></div>'
+      ? '<div class="row" style="justify-content:flex-end;gap:8px"><button class="ghost" data-review="'+c.id+'">Matches</button><button class="ghost" data-sync="'+c.id+'">Sync now</button><button class="ghost" data-unlink="'+c.id+'">Unlink</button></div>'
       : '<button class="primary" data-link="'+c.id+'">Link</button>';
     return '<div class="card"><div class="row"><div><div style="font-weight:600">'+esc(c.name)+' '+badge+
       '</div><div class="muted" style="margin-top:3px">syncs '+esc(c.carries.join(', '))+(c.account?' · '+esc(c.account):'')+'</div></div>'+action+'</div></div>';
@@ -447,6 +467,7 @@ async function renderConnectors() {
     b.classList.toggle('copied', r.ok);
     setTimeout(() => { b.textContent = orig; b.disabled = false; b.classList.remove('copied'); }, 2000);
   });
+  el.querySelectorAll('[data-review]').forEach(b => b.onclick = () => { location.href = '/review/' + b.dataset.review; });
   el.querySelectorAll('[data-link]').forEach(b => b.onclick = () => { location.href = '/link/' + b.dataset.link; });
 }
 
@@ -484,7 +505,8 @@ const HINTS = {
   hardcover: 'Paste your Hardcover API token from hardcover.app/account/api. Syncs your reading progress and shelf status.',
   readwise: 'Paste your Readwise access token from readwise.io/access_token. Syncs your highlights.',
   kosync: 'Mirror your reading progress to another KOReader-compatible (KOSync) server, so your other devices see it too.',
-  bookfusion: 'Connect your BookFusion account to sync reading progress. You will approve the request on bookfusion.com.'
+  bookfusion: 'Connect your BookFusion account to sync reading progress. You will approve the request on bookfusion.com.',
+  audiobookshelf: 'Sync your reading position to the matching audiobook on your Audiobookshelf server. Create an API key in Audiobookshelf under Settings, Users, API Keys.'
 };
 
 (async () => {
@@ -521,6 +543,15 @@ function render(conn) {
       const r = await jsend('/api/v1/connectors/' + ID, 'PUT', { credential: { server: $('srv').value.trim(), username: $('u').value.trim(), password: $('p').value } });
       if (r.ok) done(); else $('e').textContent = r.data.message || 'Could not connect';
     };
+  } else if (conn.credential_kind === 'abs') {
+    f.innerHTML = '<label>Server URL</label><input id="srv" class="mono" placeholder="https://audiobookshelf.example.com">'
+      + '<div style="margin-top:10px"><label>API key</label><input id="tok" class="mono" type="password" placeholder="paste API key"></div>'
+      + '<button class="primary full mt" id="go">Connect Audiobookshelf</button><div class="err" id="e"></div>';
+    $('go').onclick = async () => {
+      $('e').textContent = '';
+      const r = await jsend('/api/v1/connectors/' + ID, 'PUT', { credential: { server: $('srv').value.trim(), token: $('tok').value.trim() } });
+      if (r.ok) done(); else $('e').textContent = r.data.message || 'Could not connect';
+    };
   } else if (conn.credential_kind === 'device_code') {
     f.innerHTML = '<p class="muted" style="margin-top:0">Click start, then approve the request on ' + esc(conn.name) + '.</p>'
       + '<button class="primary" id="start">Start</button><div id="dc" style="margin-top:14px"></div><div class="err" id="e"></div>';
@@ -553,6 +584,89 @@ async function startDeviceFlow() {
 </script>`
 );
 
+const REVIEW = shell(
+  'Matches',
+  `<div><a class="muted" href="/account">&larr; Account</a></div>
+   <div style="margin-top:16px"><span class="eyebrow">Matches</span>
+     <h1 id="title">Matches</h1>
+     <p class="sub">Which book each of your synced titles maps to. Fix anything that matched wrong, or pick a match for the ones that didn't.</p></div>
+   <div id="list" style="margin-top:8px"><p class="muted">Loading…</p></div>
+
+<script>
+const ID = decodeURIComponent(location.pathname.split('/').pop());
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+async function jget(u){ const r = await fetch(u); return { ok:r.ok, status:r.status, data: await r.json().catch(()=>({})) }; }
+async function jsend(u, m='PUT', body){ const r = await fetch(u,{method:m,headers:body?{'content-type':'application/json'}:undefined, body: body?JSON.stringify(body):undefined}); return { ok:r.ok, data: await r.json().catch(()=>({})) }; }
+
+let CONN = null, CANDIDATES = [];
+
+(async () => {
+  const list = await jget('/api/v1/connectors');
+  if (list.status === 409) { location.href = '/account'; return; }
+  CONN = (list.data.connectors || []).find(c => c.id === ID);
+  if (!CONN) { location.href = '/account'; return; }
+  $('title').textContent = CONN.name + ' matches';
+  // Preload the "currently reading" candidates for quick picking.
+  const cand = await jget('/api/v1/connectors/' + ID + '/candidates');
+  CANDIDATES = cand.data.books || [];
+  renderList();
+})();
+
+async function renderList() {
+  const { ok, data } = await jget('/api/v1/connectors/' + ID + '/review');
+  const el = $('list');
+  if (!ok) { el.innerHTML = '<p class="muted">Could not load.</p>'; return; }
+  if (!data.books.length) { el.innerHTML = '<div class="card"><p class="muted" style="margin:0">No synced books yet. Read something on your device first.</p></div>'; return; }
+  el.innerHTML = data.books.map(b => {
+    const name = b.title ? esc(b.title) + (b.author ? ' <span class="muted">· ' + esc(b.author) + '</span>' : '') : '<span class="mono">' + esc(b.document.slice(0,12)) + '…</span>';
+    const state = b.matched
+      ? '<span class="pill ok">' + (b.source === 'manual' ? 'matched (manual)' : 'matched') + '</span>'
+      : '<span class="pill warn">not matched</span>';
+    return '<div class="card"><div class="row"><div><div style="font-weight:600">' + name + ' ' + state + '</div>'
+      + (b.matched ? '<div class="muted" style="margin-top:3px">id ' + esc(b.external_id) + '</div>' : '')
+      + '</div><button class="ghost" data-pick="' + esc(b.document) + '">' + (b.matched ? 'Change' : 'Match') + '</button></div>'
+      + '<div class="picker" id="pick-' + esc(b.document) + '" hidden style="margin-top:12px"></div></div>';
+  }).join('');
+  el.querySelectorAll('[data-pick]').forEach(btn => btn.onclick = () => openPicker(btn.dataset.pick));
+}
+
+function openPicker(doc) {
+  const box = $('pick-' + doc);
+  if (!box.hidden) { box.hidden = true; return; }
+  box.hidden = false;
+  const opts = CANDIDATES.map(c => optionRow(doc, c)).join('');
+  box.innerHTML = (opts ? '<div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Currently reading</div>' + opts : '')
+    + '<div style="display:flex;gap:8px;margin-top:10px"><input placeholder="search ' + esc(CONN.name) + '…" id="q-' + doc + '" style="flex:1"><button class="ghost" data-search="' + doc + '">Search</button></div>'
+    + '<div id="results-' + doc + '"></div>'
+    + '<button class="ghost mt" data-nomatch="' + doc + '">Don\\'t sync this book</button>';
+  box.querySelectorAll('[data-choose]').forEach(bindChoose);
+  box.querySelector('[data-search]').onclick = async () => {
+    const q = $('q-' + doc).value.trim(); if (!q) return;
+    const r = await jget('/api/v1/connectors/' + ID + '/search?q=' + encodeURIComponent(q));
+    $('results-' + doc).innerHTML = (r.data.books || []).map(c => optionRow(doc, c)).join('') || '<p class="muted" style="margin:8px 0 0">No results.</p>';
+    $('results-' + doc).querySelectorAll('[data-choose]').forEach(bindChoose);
+  };
+  box.querySelector('[data-nomatch]').onclick = async () => {
+    await jsend('/api/v1/connectors/' + ID + '/matches/' + doc, 'PUT', { external_id: null });
+    renderList();
+  };
+}
+
+function optionRow(doc, c) {
+  return '<div class="row" style="padding:6px 0"><div>' + esc(c.title) + (c.author ? ' <span class="muted">· ' + esc(c.author) + '</span>' : '')
+    + '</div><button class="ghost" data-choose=\\'' + esc(JSON.stringify({ doc, id: c.externalId, title: c.title, author: c.author, edition: c.edition })) + '\\'>Use</button></div>';
+}
+function bindChoose(btn) {
+  btn.onclick = async () => {
+    const p = JSON.parse(btn.dataset.choose);
+    await jsend('/api/v1/connectors/' + ID + '/matches/' + p.doc, 'PUT', { external_id: p.id, external_edition: p.edition || null, title: p.title, author: p.author });
+    renderList();
+  };
+}
+</script>`
+);
+
 export function webRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
@@ -580,6 +694,11 @@ export function webRoutes(): Hono<AppEnv> {
   app.get('/link/:id', (c) => {
     if (!verifySession(getCookie(c, SESSION_COOKIE))) return c.redirect('/');
     return c.html(LINK);
+  });
+
+  app.get('/review/:id', (c) => {
+    if (!verifySession(getCookie(c, SESSION_COOKIE))) return c.redirect('/');
+    return c.html(REVIEW);
   });
 
   return app;

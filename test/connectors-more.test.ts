@@ -7,6 +7,7 @@ import { claimReady } from '../src/connectors/queue.js';
 import { kosyncConnector, baseUrl } from '../src/connectors/kosync.js';
 import { bookfusionConnector, extractBooks } from '../src/connectors/bookfusion.js';
 import { hardcoverConnector } from '../src/connectors/hardcover.js';
+import { audiobookshelfConnector, baseUrl as absBaseUrl } from '../src/connectors/audiobookshelf.js';
 
 function fakeTransport() {
   const calls: { url: string; method: string; body?: string }[] = [];
@@ -86,6 +87,136 @@ describe('kosync mirror fan-out (end to end)', () => {
     // A mirror PUT to the target server happened.
     expect(fake.calls.some((c) => c.url.includes('mirror.test') && c.url.includes('/syncs/progress') && c.method === 'PUT')).toBe(true);
     expect(claimReady(db, 10)).toHaveLength(0);
+  });
+});
+
+describe('audiobookshelf connector', () => {
+  const CRED = { server: 'abs.test', token: 'k' };
+
+  it('normalizes server URLs', () => {
+    expect(absBaseUrl('abs.test')).toBe('https://abs.test');
+    expect(absBaseUrl('http://abs.test/')).toBe('http://abs.test');
+  });
+
+  it('validates via /api/me', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/me', 200, { username: 'julia' });
+    const v = await audiobookshelfConnector.validate(CRED, fake.transport);
+    expect(v.ok).toBe(true);
+    expect(v.accountLabel).toContain('julia');
+  });
+
+  it('matches a book by title/author across book libraries', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/libraries', 200, { libraries: [{ id: 'lib1', mediaType: 'book' }, { id: 'pods', mediaType: 'podcast' }] });
+    fake.on('/search', 200, {
+      book: [{ libraryItem: { id: 'li_1', media: { duration: 36000, metadata: { title: 'Foundryside', authorName: 'Robert Jackson Bennett' } } } }],
+    });
+    const m = await audiobookshelfConnector.match(CRED, { document: 'd', title: 'Foundryside', author: 'Robert Jackson Bennett', filename: null }, fake.transport);
+    expect(m?.externalId).toBe('li_1');
+    expect(m?.externalEdition).toBe('36000'); // duration cached
+    // Only the book library was searched, not the podcast one.
+    expect(fake.calls.filter((c) => c.url.includes('/search'))).toHaveLength(1);
+  });
+
+  it('push maps percentage to currentTime = pct * duration', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/me/progress/li_1', 200, {});
+    const r = await audiobookshelfConnector.push(
+      CRED,
+      { externalId: 'li_1', externalEdition: '36000', confidence: 1 },
+      { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    const call = fake.calls.find((c) => c.url.includes('/api/me/progress/li_1'));
+    expect(call?.method).toBe('PATCH');
+    const body = JSON.parse(call!.body!);
+    expect(body).toMatchObject({ currentTime: 18000, duration: 36000, isFinished: false });
+  });
+
+  it('fetches item duration when not cached on the match', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/items/li_1', 200, { media: { duration: 1000 } });
+    fake.on('/api/me/progress/li_1', 200, {});
+    const r = await audiobookshelfConnector.push(
+      CRED,
+      { externalId: 'li_1', externalEdition: null, confidence: 1 },
+      { kind: 'finished', document: 'd', percentage: 1, timestamp: 1 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    const body = JSON.parse(fake.calls.find((c) => c.url.includes('/api/me/progress/li_1'))!.body!);
+    expect(body).toMatchObject({ currentTime: 1000, duration: 1000, isFinished: true });
+  });
+});
+
+describe('candidates-first matching + metadata backfill', () => {
+  async function linkHardcover(app: ReturnType<typeof makeTestApp>['app'], headers: Record<string, string>, fake: ReturnType<typeof fakeTransport>) {
+    fake.on('username', 200, { data: { me: [{ username: 'julia' }] } });
+    const r = await app.request('/api/v1/connectors/hardcover', {
+      method: 'PUT', headers, body: JSON.stringify({ credential: { token: 'hc' } }),
+    });
+    expect(r.status).toBe(200);
+  }
+
+  it('matches from the "currently reading" list before catalog search', async () => {
+    const fake = fakeTransport();
+    const { app } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    await linkHardcover(app, headers, fake);
+    await app.request('/api/v1/documents', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ items: [{ document: DOC, title: 'Foundryside', author: 'Robert Jackson Bennett' }] }),
+    });
+    // Currently-reading has the right book (id 99); search would return a wrong one.
+    fake.on('CurrentlyReading', 200, { data: { me: [{ user_books: [{ book: { id: 99, title: 'Foundryside', contributions: [{ author: { name: 'Robert Jackson Bennett' } }] } }] }] } });
+    fake.on('Search', 200, { data: { search: { results: [{ document: { id: 1, title: 'Something Else' } }] } } });
+
+    const res = await app.request(`/api/v1/connectors/hardcover/rematch/${DOC}`, { method: 'POST', headers });
+    expect(res.status).toBe(200);
+    expect((await res.json()).match.externalId).toBe('99');
+    // It resolved from currently-reading, so no Search call was made.
+    expect(fake.calls.some((c) => c.body?.includes('query Search'))).toBe(false);
+  });
+
+  it('a manual match backfills the book title for a metadata-less document', async () => {
+    const fake = fakeTransport();
+    const { app } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    await linkHardcover(app, headers, fake);
+    // Sync progress with NO metadata -> documents has no title.
+    await app.request('/syncs/progress', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.3, device_id: 'd1' }),
+    });
+    let docs = await (await app.request('/api/v1/documents', { headers })).json();
+    expect(docs.items.find((d: { document: string }) => d.document === DOC)?.title ?? null).toBeNull();
+
+    // Manually match to a Hardcover record with a title -> backfills metadata.
+    const set = await app.request(`/api/v1/connectors/hardcover/matches/${DOC}`, {
+      method: 'PUT', headers,
+      body: JSON.stringify({ external_id: '42', title: 'Foundryside', author: 'Robert Jackson Bennett' }),
+    });
+    expect(set.status).toBe(200);
+    docs = await (await app.request('/api/v1/documents', { headers })).json();
+    const row = docs.items.find((d: { document: string }) => d.document === DOC);
+    expect(row.title).toBe('Foundryside');
+    expect(row.author).toBe('Robert Jackson Bennett');
+  });
+
+  it('review endpoint lists synced books with match state', async () => {
+    const fake = fakeTransport();
+    const { app } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    await linkHardcover(app, headers, fake);
+    await app.request('/syncs/progress', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.3, device_id: 'd1', metadata: { title: 'Foundryside', authors: 'RJB' } }),
+    });
+    const review = await (await app.request('/api/v1/connectors/hardcover/review', { headers })).json();
+    expect(review.books).toHaveLength(1);
+    expect(review.books[0]).toMatchObject({ document: DOC, title: 'Foundryside', matched: false });
   });
 });
 

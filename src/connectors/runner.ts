@@ -8,6 +8,7 @@ import {
   type QueueRow,
 } from './queue.js';
 import {
+  backfillDocumentMeta,
   decryptCredential,
   documentMeta,
   getAccount,
@@ -15,6 +16,7 @@ import {
   saveMatch,
   setAccountStatus,
 } from './store.js';
+import { decideMatch, extractTitleAuthor } from './matching.js';
 import type { HttpTransport, Match, OutboundEvent } from './types.js';
 
 /**
@@ -52,8 +54,39 @@ export async function resolveMatch(
   if (!connector || !account) return null;
   const cred = decryptCredential(account);
   const meta = documentMeta(db, userId, document);
-  const match = await connector.match(cred, meta, http);
+
+  let match: Match | null = null;
+
+  // Candidates-first: try the user's "currently reading" list (small, high
+  // precision) before falling back to a full catalog search.
+  const ta = extractTitleAuthor(meta);
+  if (ta && connector.listCurrentlyReading) {
+    try {
+      const candidates = await connector.listCurrentlyReading(cred, http);
+      const decision = decideMatch(ta.title, ta.author, candidates);
+      if (decision.accepted && decision.best) {
+        const chosen = candidates.find((x) => x.externalId === decision.best!.externalId);
+        match = {
+          externalId: decision.best.externalId,
+          externalEdition: chosen?.edition ?? null,
+          confidence: decision.best.score,
+          title: chosen?.title,
+          author: chosen?.author,
+        };
+      }
+    } catch {
+      // Currently-reading lookup is best-effort; fall through to search.
+    }
+  }
+
+  if (!match) {
+    match = await connector.match(cred, meta, http);
+  }
+
   saveMatch(db, userId, connectorId, document, match, match ? 'auto' : 'none');
+  // A resolved match teaches us the book's title/author; keep it for future
+  // metadata-less syncs and other connectors.
+  if (match) backfillDocumentMeta(db, userId, document, match.title, match.author);
   return match;
 }
 

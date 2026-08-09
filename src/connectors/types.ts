@@ -8,7 +8,7 @@ export type Capability = { read: boolean; write: boolean };
 /** What data types a connector carries (progress/shelves vs highlights). */
 export type DataKind = 'progress' | 'finished' | 'highlight';
 
-export type CredentialKind = 'token' | 'oauth' | 'cookies' | 'kosync' | 'device_code';
+export type CredentialKind = 'token' | 'oauth' | 'cookies' | 'kosync' | 'device_code' | 'abs';
 
 /** Interactive OAuth device-code link handshake (BookFusion). */
 export interface DeviceLinkStart {
@@ -41,6 +41,18 @@ export interface Match {
   externalEdition?: string | null;
   confidence: number; // 0..1
   queryUsed?: string;
+  /** Title/author of the matched record, when known — used to backfill document metadata. */
+  title?: string | null;
+  author?: string | null;
+}
+
+/** A book on the user's "currently reading" / "in progress" list at a connector. */
+export interface ExternalBook {
+  externalId: string;
+  title: string;
+  author?: string | null;
+  /** Optional extra id (e.g. Audiobookshelf duration) cached onto the match. */
+  edition?: string | null;
 }
 
 /** A canonical reading event to fan out to a connector. */
@@ -117,6 +129,16 @@ export interface Connector {
 
   /** Push one outbound event. Only called for write-capable connectors. */
   push(cred: Credential, match: Match, ev: OutboundEvent, http: HttpTransport): Promise<PushResult>;
+
+  /**
+   * The user's "currently reading" / "in progress" books at this service.
+   * A small, high-signal candidate pool tried before catalog search, and shown
+   * in the manual-match picker. Optional.
+   */
+  listCurrentlyReading?(cred: Credential, http: HttpTransport): Promise<ExternalBook[]>;
+
+  /** Free-text catalog search for the manual-match picker. Optional. */
+  search?(cred: Credential, query: string, http: HttpTransport): Promise<ExternalBook[]>;
 
   /** Begin an interactive device-code link (OAuth device grant). Optional. */
   beginLink?(http: HttpTransport): Promise<DeviceLinkStart>;

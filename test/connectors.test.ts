@@ -55,7 +55,7 @@ describe('connector management API', () => {
     expect(body.encryption).toBe('enabled');
     const ids = body.connectors.map((c: { id: string }) => c.id).sort();
     // Readwise is hidden for now; still registered but not listed.
-    expect(ids).toEqual(['bookfusion', 'hardcover', 'kosync']);
+    expect(ids).toEqual(['audiobookshelf', 'bookfusion', 'hardcover', 'kosync']);
     expect(body.connectors.every((c: { linked: boolean }) => !c.linked)).toBe(true);
   });
 

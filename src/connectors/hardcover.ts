@@ -3,6 +3,7 @@ import type {
   Connector,
   Credential,
   DocumentMeta,
+  ExternalBook,
   HttpTransport,
   Match,
   OutboundEvent,
@@ -105,11 +106,61 @@ async function match(
   if (hits.length === 0) return null;
   const decision = decideMatch(ta.title, ta.author, hits);
   if (!decision.accepted || !decision.best) return null;
+  const chosen = hits.find((h) => h.externalId === decision.best!.externalId);
   return {
     externalId: decision.best.externalId,
     confidence: decision.best.score,
     queryUsed: q,
+    title: chosen?.title ?? null,
+    author: chosen?.author ?? null,
   };
+}
+
+/** The user's "Currently Reading" shelf (status_id 2). */
+async function listCurrentlyReading(cred: Credential, http: HttpTransport): Promise<ExternalBook[]> {
+  const token = tokenOf(cred);
+  // GATE: confirm user_books/status_id shape.
+  const r = await gql(
+    http,
+    token,
+    `query CurrentlyReading {
+       me {
+         user_books(where: { status_id: { _eq: 2 } }, limit: 100) {
+           book { id title contributions { author { name } } }
+         }
+       }
+     }`,
+    {}
+  );
+  const ubs = r.data?.me?.[0]?.user_books ?? r.data?.me?.user_books ?? [];
+  const out: ExternalBook[] = [];
+  for (const ub of Array.isArray(ubs) ? ubs : []) {
+    const b = ub?.book;
+    if (b?.id == null || typeof b?.title !== 'string') continue;
+    out.push({
+      externalId: String(b.id),
+      title: b.title,
+      author: b?.contributions?.[0]?.author?.name ?? null,
+    });
+  }
+  return out;
+}
+
+/** Free-text catalog search (for the manual-match picker). */
+async function search(cred: Credential, query: string, http: HttpTransport): Promise<ExternalBook[]> {
+  const token = tokenOf(cred);
+  const r = await gql(
+    http,
+    token,
+    `query Search($q: String!) { search(query: $q, query_type: "Book", per_page: 10) { results } }`,
+    { q: query }
+  );
+  if (r.errors?.length || !r.data) return [];
+  return extractSearchHits(r.data).map((h) => ({
+    externalId: h.externalId,
+    title: h.title,
+    author: h.author ?? null,
+  }));
 }
 
 /** GATE: adapt to the real search payload. Handles a couple of plausible shapes. */
@@ -293,4 +344,6 @@ export const hardcoverConnector: Connector = {
   validate,
   match,
   push,
+  listCurrentlyReading,
+  search,
 };

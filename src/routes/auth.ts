@@ -102,6 +102,50 @@ export function authRoutes(db: DB, config: Config): Hono<AppEnv> {
     return c.json({ ok: true });
   });
 
+  // Sign in with the kosync sync account (username + password). This is the
+  // recovery path for a lost login token: prove ownership of the sync account
+  // and we log you into the master account that owns it. If the sync account
+  // isn't linked to any master yet (e.g. created on a device), we create one and
+  // link it, so device-first users get a web account too.
+  app.post('/login-kosync', rateLimiter(config.authRateLimitPerMinute), async (c) => {
+    let username: string | null = null;
+    let password: string | null = null;
+    try {
+      const body = (await c.req.json()) as Record<string, unknown>;
+      username = typeof body.username === 'string' ? body.username.trim() : null;
+      password = typeof body.password === 'string' ? body.password : null;
+    } catch {
+      /* validation below */
+    }
+    if (!username || !password) {
+      return c.json({ error: 'Username and password required' }, 400);
+    }
+    const row = db
+      .prepare('SELECT id, account_id, key_hash FROM users WHERE username = ?')
+      .get(username) as { id: number; account_id: number | null; key_hash: string } | undefined;
+    if (!row || !verifyKey(md5(password), row.key_hash)) {
+      return c.json({ error: 'Invalid sync account credentials' }, 401);
+    }
+    let accountId = row.account_id;
+    if (!accountId) {
+      // Claim: create a master account for this sync identity and link it.
+      let handle = username;
+      if (!USERNAME_RE.test(handle) || db.prepare('SELECT 1 FROM accounts WHERE handle = ?').get(handle)) {
+        const base = (handle.replace(/[^A-Za-z0-9._@+-]/g, '').slice(0, 56) || 'user');
+        handle = `${base}-${crypto.randomBytes(2).toString('hex')}`;
+      }
+      const info = db
+        .prepare('INSERT INTO accounts (handle, token_hash, created_at) VALUES (?, ?, ?)')
+        .run(handle, '', nowSeconds());
+      accountId = Number(info.lastInsertRowid);
+      const token = `xp1_${accountId}_${crypto.randomBytes(16).toString('hex')}`;
+      db.prepare('UPDATE accounts SET token_hash = ? WHERE id = ?').run(hashKey(md5(token)), accountId);
+      db.prepare('UPDATE users SET account_id = ? WHERE id = ?').run(accountId, row.id);
+    }
+    setSessionCookie(c, accountId);
+    return c.json({ ok: true });
+  });
+
   app.post('/logout', (c) => {
     deleteCookie(c, SESSION_COOKIE, { path: '/' });
     return c.json({ ok: true });

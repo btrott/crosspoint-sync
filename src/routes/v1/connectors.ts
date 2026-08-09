@@ -7,6 +7,8 @@ import { purgeConnector, queueDepth } from '../../connectors/queue.js';
 import { backfillConnector } from '../../connectors/fanout.js';
 import { resolveMatch } from '../../connectors/runner.js';
 import {
+  backfillDocumentMeta,
+  decryptCredential,
   deleteAccount,
   getAccount,
   getMatch,
@@ -178,6 +180,78 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
     });
   });
 
+  // Review list: every synced book with its title and this connector's match state.
+  app.get('/connectors/:id/review', (c) => {
+    const conn = getConnector(c.req.param('id'));
+    if (!conn) return c.json({ code: 2003, message: 'Unknown connector' }, 404);
+    const user = c.get('user');
+    const rows = db
+      .prepare(
+        `SELECT p.document AS document, d.title AS title, d.author AS author,
+                m.external_id AS external_id, m.source AS source, m.confidence AS confidence
+         FROM progress p
+         LEFT JOIN documents d ON d.user_id = p.user_id AND d.document = p.document
+         LEFT JOIN connector_matches m ON m.user_id = p.user_id AND m.connector_id = ? AND m.document = p.document
+         WHERE p.user_id = ?
+         GROUP BY p.document
+         ORDER BY MAX(p.updated_at) DESC
+         LIMIT 500`
+      )
+      .all(conn.id, user.id) as unknown as {
+      document: string;
+      title: string | null;
+      author: string | null;
+      external_id: string | null;
+      source: string | null;
+      confidence: number | null;
+    }[];
+    return c.json({
+      connector: conn.id,
+      books: rows.map((r) => ({
+        document: r.document,
+        title: r.title,
+        author: r.author,
+        matched: !!r.external_id,
+        external_id: r.external_id,
+        source: r.source ?? 'none',
+        confidence: r.confidence ?? 0,
+      })),
+    });
+  });
+
+  // The user's "currently reading" list at this connector (manual-match picker).
+  app.get('/connectors/:id/candidates', async (c) => {
+    const conn = getConnector(c.req.param('id'));
+    if (!conn) return c.json({ code: 2003, message: 'Unknown connector' }, 404);
+    if (!conn.listCurrentlyReading) return c.json({ books: [] });
+    const user = c.get('user');
+    const account = getAccount(db, user.id, conn.id);
+    if (!account) return c.json({ code: 2003, message: 'Connector not linked' }, 400);
+    try {
+      const books = await conn.listCurrentlyReading(decryptCredential(account), transport);
+      return c.json({ books });
+    } catch (err) {
+      return c.json({ books: [], error: err instanceof Error ? err.message : 'failed' });
+    }
+  });
+
+  // Free-text search at this connector (manual-match picker).
+  app.get('/connectors/:id/search', async (c) => {
+    const conn = getConnector(c.req.param('id'));
+    if (!conn) return c.json({ code: 2003, message: 'Unknown connector' }, 404);
+    const q = (c.req.query('q') ?? '').trim();
+    if (!conn.search || q.length === 0) return c.json({ books: [] });
+    const user = c.get('user');
+    const account = getAccount(db, user.id, conn.id);
+    if (!account) return c.json({ code: 2003, message: 'Connector not linked' }, 400);
+    try {
+      const books = await conn.search(decryptCredential(account), q, transport);
+      return c.json({ books });
+    } catch (err) {
+      return c.json({ books: [], error: err instanceof Error ? err.message : 'failed' });
+    }
+  });
+
   // Manually set/override a match (sticky - never auto-recomputed).
   app.put('/connectors/:id/matches/:document', async (c) => {
     const conn = getConnector(c.req.param('id'));
@@ -203,6 +277,8 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
     if (typeof externalId !== 'string' || externalId.length === 0 || externalId.length > 128) {
       return kosyncError(c, 403, 2003, 'Invalid request');
     }
+    const title = typeof o.title === 'string' ? o.title : null;
+    const author = typeof o.author === 'string' ? o.author : null;
     saveMatch(
       db,
       user.id,
@@ -212,9 +288,14 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
         externalId,
         externalEdition: typeof o.external_edition === 'string' ? o.external_edition : null,
         confidence: 1,
+        title,
+        author,
       },
       'manual'
     );
+    // A manual pick also teaches us the book's title/author (if we lacked it),
+    // so metadata-less syncs and other connectors benefit.
+    backfillDocumentMeta(db, user.id, document, title, author);
     return c.json({ document, external_id: externalId, source: 'manual' });
   });
 

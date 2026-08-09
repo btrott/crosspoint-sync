@@ -72,7 +72,7 @@ function tokenOverlap(a: string, b: string): number {
 export interface Candidate {
   externalId: string;
   title: string;
-  author?: string;
+  author?: string | null;
   /** Optional popularity/rank signal (higher = more popular), used as a tiebreak. */
   popularity?: number;
 }

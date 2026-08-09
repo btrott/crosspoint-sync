@@ -3,6 +3,7 @@ import { hardcoverConnector } from './hardcover.js';
 import { readwiseConnector } from './readwise.js';
 import { kosyncConnector } from './kosync.js';
 import { bookfusionConnector } from './bookfusion.js';
+import { audiobookshelfConnector } from './audiobookshelf.js';
 
 /** All connectors known to this build. */
 const CONNECTORS: Connector[] = [
@@ -10,6 +11,7 @@ const CONNECTORS: Connector[] = [
   hardcoverConnector,
   readwiseConnector,
   bookfusionConnector,
+  audiobookshelfConnector,
 ];
 
 const byId = new Map(CONNECTORS.map((c) => [c.id, c]));

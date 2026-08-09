@@ -62,6 +62,55 @@ describe('master (website) account', () => {
     expect(login.status).toBe(200);
   });
 
+  it('recover a lost token: sign in with the linked sync account creds', async () => {
+    const { app } = makeTestApp();
+    const { cookie } = await signupSession(app, 'julia');
+    await createKosync(app, cookie, 'juliareader', 'syncpw');
+    // Lost the token; sign in with the sync username + password instead.
+    const login = await app.request('/auth/login-kosync', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'juliareader', password: 'syncpw' }),
+    });
+    expect(login.status).toBe(200);
+    const c2 = login.headers.get('set-cookie')!.split(';')[0];
+    // Logged into the SAME master account.
+    expect((await (await app.request('/auth/me', { headers: { cookie: c2 } })).json()).handle).toBe('julia');
+  });
+
+  it('sync-account login claims a master for an orphan (device-created) sync account', async () => {
+    const { app } = makeTestApp();
+    // Device registers a kosync account directly, no web account.
+    await app.request('/users/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'reader1', password: md5('devpw') }),
+    });
+    const login = await app.request('/auth/login-kosync', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'reader1', password: 'devpw' }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = login.headers.get('set-cookie')!.split(';')[0];
+    // A master account now exists and the sync account is linked (v1 works).
+    expect((await app.request('/api/v1/connectors', { headers: { cookie } })).status).toBe(200);
+    // kosync status shows the linked account.
+    expect((await (await app.request('/account/kosync', { headers: { cookie } })).json()).username).toBe('reader1');
+  });
+
+  it('rejects sync-account login with a wrong password', async () => {
+    const { app } = makeTestApp();
+    const { cookie } = await signupSession(app, 'julia');
+    await createKosync(app, cookie, 'juliareader', 'syncpw');
+    const login = await app.request('/auth/login-kosync', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'juliareader', password: 'wrong' }),
+    });
+    expect(login.status).toBe(401);
+  });
+
   it('v1 data endpoints return 409 until a kosync account is linked', async () => {
     const { app } = makeTestApp();
     const { cookie } = await signupSession(app, 'julia');
