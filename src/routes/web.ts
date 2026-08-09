@@ -18,6 +18,17 @@ const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..',
 const LOGO = fs.readFileSync(path.join(ASSETS_DIR, 'logo.png'));
 const FAVICON = fs.readFileSync(path.join(ASSETS_DIR, 'favicon.png'));
 
+// Service app icons, served at /icons/:id.png. Loaded once at boot; a missing
+// file just means no icon for that service (the UI falls back gracefully).
+const SERVICE_ICONS = new Map<string, Buffer>();
+for (const id of ['kosync', 'hardcover', 'audiobookshelf', 'bookfusion', 'readwise']) {
+  try {
+    SERVICE_ICONS.set(id, fs.readFileSync(path.join(ASSETS_DIR, 'icons', `${id}.png`)));
+  } catch {
+    /* icon optional */
+  }
+}
+
 const STYLE = `
   :root {
     color-scheme: light;
@@ -153,6 +164,9 @@ const STYLE = `
   .svc:first-child { border-top:0; }
   .svc .name { font-weight:600; }
   .svc .desc { color:var(--stone-600); font-size:13px; margin-top:2px; line-height:1.5; }
+  .lead { display:flex; gap:12px; align-items:flex-start; min-width:0; }
+  .svc-icon { width:34px; height:34px; border-radius:8px; flex:0 0 auto; object-fit:cover;
+    box-shadow:0 1px 2px rgba(0,0,0,0.12); background:#fff; }
 `;
 
 function shell(title: string, body: string, wide = false): string {
@@ -205,17 +219,17 @@ const LANDING = shell(
 
    <h2 style="${SECTION}">Services you can link</h2>
    <div class="card">
-     <div class="svc"><div><div class="name">Another KOSync server</div>
-       <div class="desc">Mirror your progress to sync.koreader.rocks or your own server, so your other KOReader devices stay in sync too.</div></div>
+     <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/kosync.png" alt="" width="34" height="34"><div><div class="name">Another KOSync server</div>
+       <div class="desc">Mirror your progress to sync.koreader.rocks or your own server, so your other KOReader devices stay in sync too.</div></div></div>
        <span class="pill">ready</span></div>
-     <div class="svc"><div><div class="name">Hardcover</div>
-       <div class="desc">Keep your Hardcover shelf and reading progress up to date automatically.</div></div>
+     <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/hardcover.png" alt="" width="34" height="34"><div><div class="name">Hardcover</div>
+       <div class="desc">Keep your Hardcover shelf and reading progress up to date automatically.</div></div></div>
        <span class="pill warn">beta</span></div>
-     <div class="svc"><div><div class="name">Audiobookshelf</div>
-       <div class="desc">Keep your place between the ebook and the audiobook, both ways. Read some, then pick up listening right where you left off.</div></div>
+     <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/audiobookshelf.png" alt="" width="34" height="34"><div><div class="name">Audiobookshelf</div>
+       <div class="desc">Keep your place between the ebook and the audiobook, both ways. Read some, then pick up listening right where you left off.</div></div></div>
        <span class="pill">ready</span></div>
-     <div class="svc"><div><div class="name">BookFusion</div>
-       <div class="desc">Sync your reading position to your BookFusion library.</div></div>
+     <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/bookfusion.png" alt="" width="34" height="34"><div><div class="name">BookFusion</div>
+       <div class="desc">Sync your reading position to your BookFusion library.</div></div></div>
        <span class="pill warn">experimental</span></div>
      <p style="font-family:'Caveat',cursive;font-weight:600;font-size:19px;color:var(--brand-600);margin:16px 0 0;transform:rotate(-1deg)">more on the way, and it's all open source</p>
    </div>
@@ -460,8 +474,8 @@ async function renderConnectors() {
     const action = c.linked
       ? '<div class="row" style="justify-content:flex-end;gap:8px"><button class="ghost" data-review="'+c.id+'">Matches</button><button class="ghost" data-sync="'+c.id+'">Sync now</button></div>'
       : '<button class="primary" data-link="'+c.id+'">Link</button>';
-    return '<div class="card"><div class="row"><div><div style="font-weight:600">'+esc(c.name)+' '+badge+
-      '</div><div class="muted" style="margin-top:3px">syncs '+esc(c.carries.join(', '))+(c.account?' · '+esc(c.account):'')+'</div></div>'+action+'</div></div>';
+    return '<div class="card"><div class="row"><div class="lead"><img class="svc-icon" src="/icons/'+esc(c.id)+'.png" alt="" width="34" height="34" onerror="this.style.display=\\'none\\'"><div><div style="font-weight:600">'+esc(c.name)+' '+badge+
+      '</div><div class="muted" style="margin-top:3px">syncs '+esc(c.carries.join(', '))+(c.account?' · '+esc(c.account):'')+'</div></div></div>'+action+'</div></div>';
   }).join('');
   el.querySelectorAll('[data-unlink]').forEach(b => b.onclick = async (e) => {
     e.preventDefault();
@@ -698,6 +712,13 @@ export function webRoutes(): Hono<AppEnv> {
     c.header('content-type', 'image/png');
     c.header('cache-control', 'public, max-age=86400');
     return c.body(FAVICON);
+  });
+  app.get('/icons/:file', (c) => {
+    const icon = SERVICE_ICONS.get(c.req.param('file').replace(/\.png$/, ''));
+    if (!icon) return c.notFound();
+    c.header('content-type', 'image/png');
+    c.header('cache-control', 'public, max-age=604800');
+    return c.body(new Uint8Array(icon));
   });
 
   app.get('/', (c) => {
