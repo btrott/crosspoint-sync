@@ -173,6 +173,13 @@ describe('audiobookshelf connector', () => {
     expect(body.currentTime).toBeUndefined();
   });
 
+  it('resolveEdition fetches and stringifies the item duration', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/items/li_1', 200, { media: { duration: 7200 } });
+    const ed = await audiobookshelfConnector.resolveEdition!(CRED, 'li_1', fake.transport);
+    expect(ed).toBe('7200');
+  });
+
   it('sums audio file durations when media.duration is absent', async () => {
     const fake = fakeTransport();
     fake.on('/api/items/li_1', 200, { media: { audioFiles: [{ duration: 600 }, { duration: 400 }] } });
