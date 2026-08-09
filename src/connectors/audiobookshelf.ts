@@ -233,8 +233,14 @@ async function push(
   // reading position even when we can't resolve the audiobook duration. When we
   // DO know the duration we also send currentTime/duration so the app seeks to
   // the right spot in the audio.
+  //
+  // IMPORTANT: ABS ignores the `progress` field when the payload also carries
+  // `isFinished: false` (verified against a live server) - it only updates the
+  // displayed progress if isFinished is absent or true. So we send isFinished
+  // ONLY when finishing; otherwise we omit it and let progress/currentTime land.
   const duration = await resolveDuration(http, c, m);
-  const payload: Record<string, unknown> = { progress: finished ? 1 : pct, isFinished: finished };
+  const payload: Record<string, unknown> = { progress: finished ? 1 : pct };
+  if (finished) payload.isFinished = true;
   if (duration) {
     payload.duration = duration;
     payload.currentTime = Math.max(0, Math.min(duration, pct * duration));

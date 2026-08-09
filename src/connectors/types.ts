@@ -131,6 +131,14 @@ export interface Connector {
   experimental: boolean;
   /** Hidden from the connector list/UI (still registered; not user-linkable via the UI). */
   hidden?: boolean;
+  /**
+   * How a document is matched to this service.
+   *  - 'metadata' (default): needs the book's title/author, so documents with no
+   *    metadata can never match and are skipped on fan-out (no wasted attempts).
+   *  - 'document': keyed by our document id directly (e.g. a kosync mirror), so it
+   *    always applies regardless of metadata.
+   */
+  matchBy?: 'document' | 'metadata';
 
   /** Validate a credential and return the account label if possible. */
   validate(cred: Credential, http: HttpTransport): Promise<ValidateResult>;

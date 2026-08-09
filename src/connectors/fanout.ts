@@ -2,9 +2,28 @@ import type { DB } from '../db/db.js';
 import { secretsEnabled } from '../crypto/secrets.js';
 import { getConnector } from './registry.js';
 import { enqueue } from './queue.js';
-import { activeConnectorIds } from './store.js';
+import { activeConnectorIds, documentMeta, getMatch } from './store.js';
+import { extractTitleAuthor } from './matching.js';
 import { nowSeconds } from '../models/sync.js';
-import type { OutboundEvent } from './types.js';
+import type { Connector, OutboundEvent } from './types.js';
+
+/**
+ * Whether it's worth attempting a document on this connector. Metadata-matched
+ * services (Hardcover, BookFusion, Audiobookshelf) can only match a book we have
+ * title/author for, so a document with no metadata and no existing match would
+ * just dead-letter as "no book match" - skip it. Document-keyed connectors (a
+ * kosync mirror) always apply. A manual "no match" override also skips.
+ */
+export function isAttemptable(db: DB, userId: number, conn: Connector, document: string): boolean {
+  if (conn.matchBy === 'document') return true;
+  const match = getMatch(db, userId, conn.id, document);
+  if (match) {
+    if (match.external_id != null) return true; // already matched
+    if (match.source === 'manual') return false; // explicit "don't sync this"
+  }
+  // No usable match yet: only attempt if we have metadata to match on.
+  return extractTitleAuthor(documentMeta(db, userId, document)) != null;
+}
 
 /**
  * Enqueue canonical reading events to every linked connector that carries the
@@ -24,6 +43,7 @@ function fanOut(
       if (connectorId === exceptConnectorId) continue; // loop suppression: don't echo to the source
       const conn = getConnector(connectorId);
       if (!conn || !conn.capabilities.write || !conn.carries.includes(ev.kind)) continue;
+      if (!isAttemptable(db, userId, conn, ev.document)) continue; // no metadata/match: skip
       enqueue(db, userId, connectorId, ev, coalesceKey);
     }
   } catch (err) {
@@ -116,6 +136,7 @@ export function backfillConnector(db: DB, userId: number, connectorId: string): 
       const finished = r.percentage >= 0.98;
       const kind = finished ? 'finished' : 'progress';
       if (!conn.carries.includes(kind)) continue;
+      if (!isAttemptable(db, userId, conn, r.document)) continue; // no metadata/match: skip
       let position: Record<string, unknown> | null = null;
       if (r.position) {
         try {

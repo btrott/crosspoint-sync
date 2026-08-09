@@ -179,6 +179,27 @@ describe('fan-out on progress sync', () => {
     expect(claimReady(db, 10)).toHaveLength(0);
   });
 
+  it('does not fan out a metadata-less document to a metadata-matched connector', async () => {
+    const fake = fakeTransport();
+    fake.on('graphql', 200, { data: { me: [{ username: 'julia' }] } });
+    const { app, db } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    await app.request('/api/v1/connectors/hardcover', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ credential: { token: 'hc' } }),
+    });
+    // Sync progress for a document we have NO title/author for.
+    await app.request('/syncs/progress', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.3, device_id: 'd1' }),
+    });
+    // Nothing queued: Hardcover can only match books we have metadata for, so a
+    // metadata-less document would just dead-letter as "no book match".
+    expect(claimReady(db, 10)).toHaveLength(0);
+  });
+
   it('manual match override is honored and sticky', async () => {
     const fake = fakeTransport();
     fake.on('graphql', 200, { data: { me: [{ username: 'julia' }] } });

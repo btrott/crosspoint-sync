@@ -134,7 +134,10 @@ describe('audiobookshelf connector', () => {
     const call = fake.calls.find((c) => c.url.includes('/api/me/progress/li_1'));
     expect(call?.method).toBe('PATCH');
     const body = JSON.parse(call!.body!);
-    expect(body).toMatchObject({ currentTime: 18000, duration: 36000, isFinished: false });
+    // In-progress: send progress + currentTime, and OMIT isFinished (ABS ignores
+    // `progress` when isFinished:false is present).
+    expect(body).toMatchObject({ progress: 0.5, currentTime: 18000, duration: 36000 });
+    expect(body.isFinished).toBeUndefined();
   });
 
   it('fetches item duration when not cached on the match', async () => {
@@ -167,10 +170,12 @@ describe('audiobookshelf connector', () => {
     const call = fake.calls.find((c) => c.url.includes('/api/me/progress/li_1'));
     expect(call?.method).toBe('PATCH');
     const body = JSON.parse(call!.body!);
-    // Sends the progress fraction directly; omits currentTime/duration.
-    expect(body).toMatchObject({ progress: 0.42, isFinished: false });
+    // Sends the progress fraction directly; omits currentTime/duration and
+    // isFinished (ABS drops `progress` if isFinished:false is present).
+    expect(body).toMatchObject({ progress: 0.42 });
     expect(body.duration).toBeUndefined();
     expect(body.currentTime).toBeUndefined();
+    expect(body.isFinished).toBeUndefined();
   });
 
   it('resolveEdition fetches and stringifies the item duration', async () => {

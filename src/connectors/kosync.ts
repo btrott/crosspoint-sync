@@ -123,6 +123,8 @@ export const kosyncConnector: Connector = {
   carries: ['progress', 'finished'],
   credentialKind: 'kosync',
   experimental: false,
+  // Keyed by our document hash, not book metadata: always mirror.
+  matchBy: 'document',
   validate,
   match,
   push,
