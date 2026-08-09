@@ -93,6 +93,8 @@ const STYLE = `
     box-shadow:0 0 0 1px var(--stone-200); color:var(--stone-500); text-transform:uppercase; letter-spacing:0.03em; }
   .pill.ok { color:var(--brand-700); box-shadow:0 0 0 1px var(--brand-100); background:var(--brand-50); }
   .pill.warn { color:#9a7a2e; box-shadow:0 0 0 1px #ecdcae; background:#faf5e6; }
+  .unlink-link { font-size:12px; font-weight:600; color:var(--stone-400); text-decoration:none; margin-left:2px; }
+  .unlink-link:hover { color:#b91c1c; text-decoration:underline; }
 
   code.token { display:block; margin:12px 0; padding:12px 14px; background:var(--stone-50);
     box-shadow:0 0 0 1px var(--stone-200); border-radius:8px; font-family:"Geist Mono",monospace;
@@ -452,15 +454,17 @@ async function renderConnectors() {
   }
   el.innerHTML = data.connectors.map(c => {
     const badge = c.linked
-      ? '<span class="pill ok">'+(c.status==='needs_reauth'?'needs reauth':'linked')+'</span>'
+      ? (c.status==='needs_reauth' ? '<span class="pill warn">needs reauth</span> ' : '') + '<a href="#" class="unlink-link" data-unlink="'+c.id+'">unlink</a>'
       : (c.experimental ? '<span class="pill warn">experimental</span>' : '<span class="pill">not linked</span>');
     const action = c.linked
-      ? '<div class="row" style="justify-content:flex-end;gap:8px"><button class="ghost" data-review="'+c.id+'">Matches</button><button class="ghost" data-sync="'+c.id+'">Sync now</button><button class="ghost" data-unlink="'+c.id+'">Unlink</button></div>'
+      ? '<div class="row" style="justify-content:flex-end;gap:8px"><button class="ghost" data-review="'+c.id+'">Matches</button><button class="ghost" data-sync="'+c.id+'">Sync now</button></div>'
       : '<button class="primary" data-link="'+c.id+'">Link</button>';
     return '<div class="card"><div class="row"><div><div style="font-weight:600">'+esc(c.name)+' '+badge+
       '</div><div class="muted" style="margin-top:3px">syncs '+esc(c.carries.join(', '))+(c.account?' · '+esc(c.account):'')+'</div></div>'+action+'</div></div>';
   }).join('');
-  el.querySelectorAll('[data-unlink]').forEach(b => b.onclick = async () => {
+  el.querySelectorAll('[data-unlink]').forEach(b => b.onclick = async (e) => {
+    e.preventDefault();
+    if (!confirm('Unlink this service? Its saved matches are removed too.')) return;
     await jsend('/api/v1/connectors/'+b.dataset.unlink, 'DELETE'); renderConnectors();
   });
   el.querySelectorAll('[data-sync]').forEach(b => b.onclick = async () => {
