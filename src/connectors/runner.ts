@@ -5,6 +5,7 @@ import {
   claimReady,
   markDone,
   markFailed,
+  _internals,
   type QueueRow,
 } from './queue.js';
 import {
@@ -129,10 +130,28 @@ export async function processRow(db: DB, row: QueueRow, http: HttpTransport): Pr
     if (result.needsReauth) {
       setAccountStatus(db, row.user_id, row.connector_id, 'needs_reauth', result.error);
     }
+    logPushFailure(row, result.error, result.retryable);
     markFailed(db, row, result.error, result.retryable);
   } catch (err) {
+    logPushFailure(row, errStr(err), true);
     markFailed(db, row, errStr(err), true);
   }
+}
+
+/** Surface a push failure in stdout (Railway/Docker logs), not just the DB row. */
+function logPushFailure(row: QueueRow, error: string | undefined, retryable: boolean): void {
+  console.error(
+    JSON.stringify({
+      msg: 'connector push failed',
+      connector: row.connector_id,
+      user_id: row.user_id,
+      document: row.document,
+      kind: row.kind,
+      attempts: row.attempts + 1,
+      outcome: retryable && row.attempts + 1 < _internals.MAX_ATTEMPTS ? 'retry' : 'dead',
+      error: error ?? 'unknown',
+    })
+  );
 }
 
 /** Drain up to `limit` ready events. Returns the number processed. */
