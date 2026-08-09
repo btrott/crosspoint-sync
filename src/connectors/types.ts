@@ -152,6 +152,13 @@ export interface Connector {
   search?(cred: Credential, query: string, http: HttpTransport): Promise<ExternalBook[]>;
 
   /**
+   * Resolve the opaque `externalEdition` hint for an already-chosen book (e.g.
+   * an audiobook's duration). Called when a match is saved without one so push
+   * has what it needs. Optional; returns null if it can't be determined.
+   */
+  resolveEdition?(cred: Credential, externalId: string, http: HttpTransport): Promise<string | null>;
+
+  /**
    * Pull position changes since a cursor (ms epoch), for bidirectional sync.
    * Only read-capable connectors implement it. The runner maps each change back
    * to a document and writes it into canonical progress. Optional.

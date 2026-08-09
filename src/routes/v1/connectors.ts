@@ -279,6 +279,19 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
     }
     const title = typeof o.title === 'string' ? o.title : null;
     const author = typeof o.author === 'string' ? o.author : null;
+    let externalEdition = typeof o.external_edition === 'string' ? o.external_edition : null;
+    // If the picker didn't carry an edition hint (e.g. an audiobook duration),
+    // resolve it now so push has what it needs to place the position exactly.
+    if (!externalEdition && conn.resolveEdition) {
+      const account = getAccount(db, user.id, conn.id);
+      if (account) {
+        try {
+          externalEdition = await conn.resolveEdition(decryptCredential(account), externalId, transport);
+        } catch {
+          externalEdition = null; // best-effort; push can still fall back
+        }
+      }
+    }
     saveMatch(
       db,
       user.id,
@@ -286,7 +299,7 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
       document,
       {
         externalId,
-        externalEdition: typeof o.external_edition === 'string' ? o.external_edition : null,
+        externalEdition,
         confidence: 1,
         title,
         author,

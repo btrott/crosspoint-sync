@@ -161,11 +161,9 @@ async function search(cred: Credential, query: string, http: HttpTransport): Pro
   return out;
 }
 
-/** Resolve the audiobook duration (seconds): cached on the match, else fetch. */
-async function resolveDuration(http: HttpTransport, c: AbsCred, m: Match): Promise<number | null> {
-  const cached = m.externalEdition ? Number(m.externalEdition) : NaN;
-  if (Number.isFinite(cached) && cached > 0) return cached;
-  const r = await absGet(http, c, `/api/items/${encodeURIComponent(m.externalId)}?expanded=1`);
+/** Fetch an item's audiobook duration in seconds (null if unknown). */
+async function fetchDuration(http: HttpTransport, c: AbsCred, externalId: string): Promise<number | null> {
+  const r = await absGet(http, c, `/api/items/${encodeURIComponent(externalId)}?expanded=1`);
   const media = r.body?.media;
   const d = media?.duration;
   if (typeof d === 'number' && d > 0) return d;
@@ -173,6 +171,21 @@ async function resolveDuration(http: HttpTransport, c: AbsCred, m: Match): Promi
   const files = Array.isArray(media?.audioFiles) ? media.audioFiles : [];
   const sum = files.reduce((acc: number, f: any) => acc + (typeof f?.duration === 'number' ? f.duration : 0), 0);
   return sum > 0 ? sum : null;
+}
+
+/** Resolve the audiobook duration (seconds): cached on the match, else fetch. */
+async function resolveDuration(http: HttpTransport, c: AbsCred, m: Match): Promise<number | null> {
+  const cached = m.externalEdition ? Number(m.externalEdition) : NaN;
+  if (Number.isFinite(cached) && cached > 0) return cached;
+  return fetchDuration(http, c, m.externalId);
+}
+
+/** Resolve+cache the duration for a chosen item (called when a match is saved). */
+async function resolveEdition(cred: Credential, externalId: string, http: HttpTransport): Promise<string | null> {
+  const c = parseCred(cred);
+  if (!c) return null;
+  const d = await fetchDuration(http, c, externalId);
+  return d != null ? String(d) : null;
 }
 
 /**
@@ -254,5 +267,6 @@ export const audiobookshelfConnector: Connector = {
   push,
   listCurrentlyReading,
   search,
+  resolveEdition,
   pullChanges,
 };
