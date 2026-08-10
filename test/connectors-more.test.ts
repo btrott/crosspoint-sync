@@ -389,61 +389,127 @@ describe('backfill / "Sync now"', () => {
 });
 
 describe('hardcover progress push', () => {
-  it('sets status and writes a read session with pages = floor(pct * edition.pages)', async () => {
+  it('adds the book and starts a dated read when it is not on a shelf', async () => {
     const fake = fakeTransport();
-    fake.on('user_books', 200, {
+    fake.on('Ctx', 200, {
       data: {
-        me: [{ user_books: [{ id: 10, edition: { id: 5, pages: 400 }, user_book_reads: [] }] }],
+        me: [{ user_books: [] }],
         books_by_pk: { default_ebook_edition: { id: 5, pages: 400 }, default_physical_edition: null },
         editions: [],
       },
     });
-    fake.on('insert_user_book', 200, { data: { insert_user_book: { user_book: { id: 10 } } } });
-    fake.on('insert_user_book_read', 200, {
+    fake.on('SetStatus', 200, { data: { insert_user_book: { user_book: { id: 10 } } } });
+    fake.on('InsRead', 200, {
       data: { insert_user_book_read: { error: null, user_book_read: { id: 99 } } },
     });
 
     const r = await hardcoverConnector.push(
       { token: 't' },
       { externalId: '42', confidence: 1 },
-      { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1 },
+      { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1_754_000_000 },
       fake.transport
     );
     expect(r.ok).toBe(true);
-    const readCall = fake.calls.find((c) => c.body?.includes('insert_user_book_read'));
-    expect(readCall).toBeTruthy();
+    const status = fake.calls.find((c) => c.body?.includes('SetStatus'));
+    expect(status!.body).toContain('"statusId":2'); // Currently Reading
+    const readCall = fake.calls.find((c) => c.body?.includes('InsRead'));
     expect(readCall!.body).toContain('"pages":200');
     expect(readCall!.body).toContain('"editionId":5');
+    expect(readCall!.body).toContain('"startedAt":"2025-07-31"'); // dated read
   });
 
-  it('updates the existing read session when one exists', async () => {
+  it('does NOT re-mark status when the book is already Currently Reading', async () => {
     const fake = fakeTransport();
-    fake.on('user_books', 200, {
+    fake.on('Ctx', 200, {
       data: {
-        me: [{ user_books: [{ id: 10, edition: { id: 5, pages: 300 }, user_book_reads: [{ id: 77, edition: { id: 5, pages: 300 } }] }] }],
-        books_by_pk: {},
-        editions: [],
+        me: [{
+          user_books: [{
+            id: 10, status_id: 2, edition: { id: 5, pages: 300 },
+            user_book_reads: [{ id: 77, started_at: '2026-08-08', finished_at: null, edition: { id: 5, pages: 300 } }],
+          }],
+        }],
+        books_by_pk: {}, editions: [],
       },
     });
-    fake.on('insert_user_book', 200, { data: { insert_user_book: { user_book: { id: 10 } } } });
-    fake.on('update_user_book_read', 200, { data: { update_user_book_read: { error: null, user_book_read: { id: 77 } } } });
+    fake.on('UpdRead', 200, { data: { update_user_book_read: { error: null, user_book_read: { id: 77 } } } });
 
     const r = await hardcoverConnector.push(
       { token: 't' },
       { externalId: '42', confidence: 1 },
-      { kind: 'progress', document: 'd', percentage: 1, timestamp: 1 },
+      { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1_754_000_000 },
       fake.transport
     );
     expect(r.ok).toBe(true);
-    const upd = fake.calls.find((c) => c.body?.includes('update_user_book_read'));
+    // The whole point: no status mutation of any kind when already reading.
+    expect(fake.calls.some((c) => c.body?.includes('SetStatus'))).toBe(false);
+    expect(fake.calls.some((c) => c.body?.includes('UpdStatus'))).toBe(false);
+    // The existing read is updated in place; its start date is not overwritten.
+    const upd = fake.calls.find((c) => c.body?.includes('UpdRead'));
     expect(upd!.body).toContain('"id":77');
-    expect(upd!.body).toContain('"pages":300'); // 100% of 300
+    expect(upd!.body).toContain('"pages":150');
+    expect(upd!.body).not.toContain('startedAt');
+  });
+
+  it('backfills a start date when the open read has none', async () => {
+    const fake = fakeTransport();
+    fake.on('Ctx', 200, {
+      data: {
+        me: [{
+          user_books: [{
+            id: 10, status_id: 2, edition: { id: 5, pages: 300 },
+            user_book_reads: [{ id: 77, started_at: null, finished_at: null, edition: { id: 5, pages: 300 } }],
+          }],
+        }],
+        books_by_pk: {}, editions: [],
+      },
+    });
+    fake.on('UpdRead', 200, { data: { update_user_book_read: { error: null, user_book_read: { id: 77 } } } });
+
+    const r = await hardcoverConnector.push(
+      { token: 't' },
+      { externalId: '42', confidence: 1 },
+      { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1_754_000_000 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    const upd = fake.calls.find((c) => c.body?.includes('UpdRead'));
+    expect(upd!.body).toContain('"id":77');
+    expect(upd!.body).toContain('"startedAt":"2025-07-31"'); // backfilled
+  });
+
+  it('finishing a reading book advances status to Read and updates the read', async () => {
+    const fake = fakeTransport();
+    fake.on('Ctx', 200, {
+      data: {
+        me: [{
+          user_books: [{
+            id: 10, status_id: 2, edition: { id: 5, pages: 300 },
+            user_book_reads: [{ id: 77, started_at: '2026-08-08', finished_at: null, edition: { id: 5, pages: 300 } }],
+          }],
+        }],
+        books_by_pk: {}, editions: [],
+      },
+    });
+    fake.on('UpdStatus', 200, { data: { update_user_book: { user_book: { id: 10 } } } });
+    fake.on('UpdRead', 200, { data: { update_user_book_read: { error: null, user_book_read: { id: 77 } } } });
+
+    const r = await hardcoverConnector.push(
+      { token: 't' },
+      { externalId: '42', confidence: 1 },
+      { kind: 'progress', document: 'd', percentage: 1, timestamp: 1_754_000_000 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    const st = fake.calls.find((c) => c.body?.includes('UpdStatus'));
+    expect(st!.body).toContain('"statusId":3'); // Read
+    const upd = fake.calls.find((c) => c.body?.includes('UpdRead'));
+    expect(upd!.body).toContain('"pages":300');
   });
 
   it('still succeeds (status only) when no edition has a page count', async () => {
     const fake = fakeTransport();
-    fake.on('user_books', 200, { data: { me: [{ user_books: [] }], books_by_pk: {}, editions: [] } });
-    fake.on('insert_user_book', 200, { data: { insert_user_book: { user_book: { id: 10 } } } });
+    fake.on('Ctx', 200, { data: { me: [{ user_books: [] }], books_by_pk: {}, editions: [] } });
+    fake.on('SetStatus', 200, { data: { insert_user_book: { user_book: { id: 10 } } } });
     const r = await hardcoverConnector.push(
       { token: 't' },
       { externalId: '42', confidence: 1 },
@@ -452,9 +518,7 @@ describe('hardcover progress push', () => {
     );
     expect(r.ok).toBe(true);
     expect(
-      fake.calls.some(
-        (c) => c.body?.includes('insert_user_book_read') || c.body?.includes('update_user_book_read')
-      )
+      fake.calls.some((c) => c.body?.includes('InsRead') || c.body?.includes('UpdRead'))
     ).toBe(false);
   });
 });

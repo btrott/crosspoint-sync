@@ -242,25 +242,13 @@ async function push(
   if (!Number.isFinite(bookId)) return { ok: false, retryable: false, error: 'bad book id' };
   const pct = Math.max(0, Math.min(1, ev.percentage ?? 0));
   const finished = ev.kind === 'finished' || pct >= 0.999;
-  const statusId = finished ? STATUS_READ : STATUS_READING;
+  const desiredStatus = finished ? STATUS_READ : STATUS_READING;
 
-  // 1) Set the shelf status (Currently Reading / Read). Best-effort: even if
-  //    this errors because the row already exists, we can still set progress.
-  const ubRes = await gql(
-    http,
-    token,
-    `mutation SetStatus($bookId: Int!, $statusId: Int!) {
-       insert_user_book(object: { book_id: $bookId, status_id: $statusId }) {
-         user_book { id }
-       }
-     }`,
-    { bookId, statusId }
-  );
-  const ubAuth = classify(ubRes);
-  if (ubAuth && !ubAuth.ok && ubAuth.needsReauth) return ubAuth;
-  let userBookId: number | undefined = ubRes.data?.insert_user_book?.user_book?.id;
-
-  // 2) Resolve the existing read session + an edition with a page count.
+  // 1) Look up the CURRENT shelf state first: the user_book (if any), its
+  //    status, the latest read session (with its dates), and an edition with a
+  //    page count. We decide what to change from here, so we never blindly
+  //    re-assert a status that is already set (which reset the read's start
+  //    date and clobbered the day's starting progress).
   const ctx = await gql(
     http,
     token,
@@ -268,8 +256,11 @@ async function push(
        me {
          user_books(where: { book_id: { _eq: $bookId } }, limit: 1) {
            id
+           status_id
            edition { id pages }
-           user_book_reads(order_by: { id: desc }, limit: 1) { id edition { id pages } }
+           user_book_reads(order_by: { id: desc }, limit: 1) {
+             id started_at finished_at edition { id pages }
+           }
          }
        }
        books_by_pk(id: $bookId) {
@@ -286,9 +277,50 @@ async function push(
   if (ctxAuth && !ctxAuth.ok && ctxAuth.needsReauth) return ctxAuth;
 
   const meUb = ctx.data?.me?.[0]?.user_books?.[0];
-  if (!userBookId) userBookId = meUb?.id;
-  const latestReadId: number | undefined = meUb?.user_book_reads?.[0]?.id;
+  let userBookId: number | undefined = meUb?.id;
+  const currentStatus: number | undefined =
+    typeof meUb?.status_id === 'number' ? meUb.status_id : undefined;
+  const latestRead = meUb?.user_book_reads?.[0];
+  const latestReadId: number | undefined = latestRead?.id;
   const edition = pickEdition(meUb, ctx.data);
+
+  // 2) Set the shelf status ONLY when it needs to change. Never re-mark a book
+  //    that is already in the desired status, and never downgrade a finished
+  //    book back to "reading".
+  if (!userBookId) {
+    // Not on a shelf yet: add it with the desired status.
+    const ubRes = await gql(
+      http,
+      token,
+      `mutation SetStatus($bookId: Int!, $statusId: Int!) {
+         insert_user_book(object: { book_id: $bookId, status_id: $statusId }) {
+           user_book { id }
+         }
+       }`,
+      { bookId, statusId: desiredStatus }
+    );
+    const a = classify(ubRes);
+    if (a && !a.ok && a.needsReauth) return a;
+    userBookId = ubRes.data?.insert_user_book?.user_book?.id;
+  } else if (
+    currentStatus !== desiredStatus &&
+    !(desiredStatus === STATUS_READING && currentStatus === STATUS_READ)
+  ) {
+    // On a shelf with a different status: advance it (want-to-read -> reading,
+    // or reading -> read on finish). Skipped when already reading.
+    const upd = await gql(
+      http,
+      token,
+      `mutation UpdStatus($id: Int!, $statusId: Int!) {
+         update_user_book(id: $id, object: { status_id: $statusId }) {
+           user_book { id }
+         }
+       }`,
+      { id: userBookId, statusId: desiredStatus }
+    );
+    const a = classify(upd);
+    if (a && !a.ok && a.needsReauth) return a;
+  }
 
   if (!edition) {
     // Shelf status is synced, but no edition with a known page count exists, so
@@ -297,32 +329,50 @@ async function push(
   }
   const progressPages = Math.max(0, Math.min(edition.pages, Math.floor(pct * edition.pages)));
 
-  // 3) Write the read session (update the latest, or create one).
+  const startedAt = new Date(Math.max(0, ev.timestamp) * 1000).toISOString().slice(0, 10);
+  // 3) Move the reading position. Update the current in-progress read (which
+  //    preserves its earlier progress), or start a new read - stamped with a
+  //    start date - only if there isn't an open one. When an existing open read
+  //    has no start date (older reads Hardcover created without one), backfill
+  //    it; never overwrite a start date that's already set.
   let res;
-  if (latestReadId) {
+  if (latestReadId && !latestRead?.finished_at) {
+    const backfillStart = !latestRead?.started_at;
     res = await gql(
       http,
       token,
-      `mutation UpdRead($id: Int!, $pages: Int!, $editionId: Int!) {
-         update_user_book_read(id: $id, object: { progress_pages: $pages, edition_id: $editionId }) {
-           error
-           user_book_read { id }
-         }
-       }`,
-      { id: latestReadId, pages: progressPages, editionId: edition.id }
+      backfillStart
+        ? `mutation UpdRead($id: Int!, $pages: Int!, $editionId: Int!, $startedAt: date!) {
+             update_user_book_read(id: $id, object: { progress_pages: $pages, edition_id: $editionId, started_at: $startedAt }) {
+               error
+               user_book_read { id }
+             }
+           }`
+        : `mutation UpdRead($id: Int!, $pages: Int!, $editionId: Int!) {
+             update_user_book_read(id: $id, object: { progress_pages: $pages, edition_id: $editionId }) {
+               error
+               user_book_read { id }
+             }
+           }`,
+      backfillStart
+        ? { id: latestReadId, pages: progressPages, editionId: edition.id, startedAt }
+        : { id: latestReadId, pages: progressPages, editionId: edition.id }
     );
   } else {
     if (!userBookId) return { ok: false, retryable: true, error: 'no user_book to attach a read to' };
     res = await gql(
       http,
       token,
-      `mutation InsRead($id: Int!, $pages: Int!, $editionId: Int!) {
-         insert_user_book_read(user_book_id: $id, user_book_read: { progress_pages: $pages, edition_id: $editionId }) {
+      `mutation InsRead($id: Int!, $pages: Int!, $editionId: Int!, $startedAt: date!) {
+         insert_user_book_read(
+           user_book_id: $id
+           user_book_read: { progress_pages: $pages, edition_id: $editionId, started_at: $startedAt }
+         ) {
            error
            user_book_read { id }
          }
        }`,
-      { id: userBookId, pages: progressPages, editionId: edition.id }
+      { id: userBookId, pages: progressPages, editionId: edition.id, startedAt }
     );
   }
   const readAuth = classify(res);
