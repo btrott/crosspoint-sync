@@ -443,11 +443,13 @@ describe('hardcover progress push', () => {
     // The whole point: no status mutation of any kind when already reading.
     expect(fake.calls.some((c) => c.body?.includes('SetStatus'))).toBe(false);
     expect(fake.calls.some((c) => c.body?.includes('UpdStatus'))).toBe(false);
-    // The existing read is updated in place; its start date is not overwritten.
+    // The existing read is updated in place, and its start date is passed back
+    // unchanged (Hardcover's read mutation replaces the record, so omitting
+    // started_at would wipe it).
     const upd = fake.calls.find((c) => c.body?.includes('UpdRead'));
     expect(upd!.body).toContain('"id":77');
     expect(upd!.body).toContain('"pages":150');
-    expect(upd!.body).not.toContain('startedAt');
+    expect(upd!.body).toContain('"startedAt":"2026-08-08"'); // preserved, not wiped
   });
 
   it('backfills a start date when the open read has none', async () => {

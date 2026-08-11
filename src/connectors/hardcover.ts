@@ -329,34 +329,25 @@ async function push(
   }
   const progressPages = Math.max(0, Math.min(edition.pages, Math.floor(pct * edition.pages)));
 
-  const startedAt = new Date(Math.max(0, ev.timestamp) * 1000).toISOString().slice(0, 10);
-  // 3) Move the reading position. Update the current in-progress read (which
-  //    preserves its earlier progress), or start a new read - stamped with a
-  //    start date - only if there isn't an open one. When an existing open read
-  //    has no start date (older reads Hardcover created without one), backfill
-  //    it; never overwrite a start date that's already set.
+  const today = new Date(Math.max(0, ev.timestamp) * 1000).toISOString().slice(0, 10);
+  // 3) Move the reading position. Hardcover's read mutations REPLACE the record
+  //    (they are custom upserts, not partial updates), so every write must carry
+  //    started_at or the start date is wiped - which also drops the journal
+  //    entry. So we always pass it: the existing start date when there is one,
+  //    else today. Update the current open read, or start a new one.
   let res;
   if (latestReadId && !latestRead?.finished_at) {
-    const backfillStart = !latestRead?.started_at;
+    const startedAt = latestRead?.started_at || today; // preserve, else backfill
     res = await gql(
       http,
       token,
-      backfillStart
-        ? `mutation UpdRead($id: Int!, $pages: Int!, $editionId: Int!, $startedAt: date!) {
-             update_user_book_read(id: $id, object: { progress_pages: $pages, edition_id: $editionId, started_at: $startedAt }) {
-               error
-               user_book_read { id }
-             }
-           }`
-        : `mutation UpdRead($id: Int!, $pages: Int!, $editionId: Int!) {
-             update_user_book_read(id: $id, object: { progress_pages: $pages, edition_id: $editionId }) {
-               error
-               user_book_read { id }
-             }
-           }`,
-      backfillStart
-        ? { id: latestReadId, pages: progressPages, editionId: edition.id, startedAt }
-        : { id: latestReadId, pages: progressPages, editionId: edition.id }
+      `mutation UpdRead($id: Int!, $pages: Int!, $editionId: Int!, $startedAt: date!) {
+         update_user_book_read(id: $id, object: { progress_pages: $pages, edition_id: $editionId, started_at: $startedAt }) {
+           error
+           user_book_read { id }
+         }
+       }`,
+      { id: latestReadId, pages: progressPages, editionId: edition.id, startedAt }
     );
   } else {
     if (!userBookId) return { ok: false, retryable: true, error: 'no user_book to attach a read to' };
@@ -372,7 +363,7 @@ async function push(
            user_book_read { id }
          }
        }`,
-      { id: userBookId, pages: progressPages, editionId: edition.id, startedAt }
+      { id: userBookId, pages: progressPages, editionId: edition.id, startedAt: today }
     );
   }
   const readAuth = classify(res);
