@@ -258,6 +258,36 @@ describe('audiobookshelf fan-in (audiobook -> ebook)', () => {
     expect(targets).not.toContain('audiobookshelf');
   });
 
+  it('maps a percentage-only fan-in to the nearest real device position (not a synthetic string)', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/me', 200, { username: 'julia' });
+    const { app, db } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    const userId = 1;
+    await app.request('/api/v1/connectors/audiobookshelf', {
+      method: 'PUT', headers, body: JSON.stringify({ credential: { server: 'abs.test', token: 'k' } }),
+    });
+    saveMatch(db, userId, 'audiobookshelf', DOC, { externalId: 'li_1', confidence: 1 }, 'manual');
+    // A real KOReader device pushed an xpointer at ~38%; ABS advances to 62%.
+    const XPOINTER = '/body/DocFragment[11]/body/div[1]/p[3]';
+    await app.request('/syncs/progress', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ document: DOC, progress: XPOINTER, percentage: 0.38, device_id: 'kindle' }),
+    });
+    fake.on('/api/me', 200, { mediaProgress: [{ libraryItemId: 'li_1', progress: 0.62, isFinished: false, lastUpdate: 8000, episodeId: null }] });
+    db.prepare('DELETE FROM connector_queue').run();
+
+    const applied = await pollConnector(db, userId, 'audiobookshelf', fake.transport);
+    expect(applied).toBe(1);
+
+    // The pulled progress carries the real xpointer (nearest sample), so stock
+    // KOReader can seek to it, while percentage reflects the audiobook position.
+    const got = await (await app.request(`/syncs/progress/${DOC}`, { headers })).json();
+    expect(got.percentage).toBe(0.62);
+    expect(got.progress).toBe(XPOINTER);
+    expect(got.progress).not.toContain('audiobookshelf:');
+  });
+
   it('epsilon-suppresses an echo of our own pushed value', async () => {
     const fake = fakeTransport();
     fake.on('/api/me', 200, { username: 'julia' });
@@ -522,6 +552,30 @@ describe('hardcover progress push', () => {
     expect(
       fake.calls.some((c) => c.body?.includes('InsRead') || c.body?.includes('UpdRead'))
     ).toBe(false);
+  });
+
+  it('falls back to any book edition with a page count (not just the default)', async () => {
+    const fake = fakeTransport();
+    // No user edition, no default editions - but the book has a paged edition.
+    fake.on('Ctx', 200, {
+      data: {
+        me: [{ user_books: [{ id: 10, status_id: 2, edition: null, user_book_reads: [{ id: 77, started_at: '2026-08-01', finished_at: null, edition: null }] }] }],
+        books_by_pk: { default_ebook_edition: null, default_physical_edition: null },
+        editions: [{ id: 900, pages: 500 }],
+      },
+    });
+    fake.on('UpdRead', 200, { data: { update_user_book_read: { error: null, user_book_read: { id: 77 } } } });
+
+    const r = await hardcoverConnector.push(
+      { token: 't' },
+      { externalId: '42', confidence: 1 },
+      { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1_754_000_000 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    const upd = fake.calls.find((c) => c.body?.includes('UpdRead'));
+    expect(upd!.body).toContain('"editionId":900');
+    expect(upd!.body).toContain('"pages":250'); // 50% of 500
   });
 });
 

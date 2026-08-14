@@ -70,6 +70,70 @@ export function upsertDocumentMetadata(
   ).run(userId, document, meta.title, meta.authors, meta.filename, updatedAt);
 }
 
+/**
+ * A "real" KOReader position we can later replay: an xpointer (EPUB, starts with
+ * "/") or a page number (PDF). Synthetic connector strings (e.g.
+ * "audiobookshelf:405000") are excluded - replaying one seeks nowhere.
+ */
+export function isRealPosition(progress: string | null | undefined): boolean {
+  if (!progress) return false;
+  return progress.startsWith('/') || /^\d+(\.\d+)?$/.test(progress);
+}
+
+/**
+ * Record a (percentage -> real position) sample for a document. Bucketed to
+ * 0.1% so the table stays bounded; the newest position wins within a bucket.
+ * These samples let fan-in translate a percentage-only update into a real
+ * position (see nearestProgressSample).
+ */
+export function recordProgressSample(
+  db: DB,
+  userId: number,
+  document: string,
+  percentage: number,
+  progress: string,
+  position: string | null,
+  updatedAt: number
+): void {
+  if (!isRealPosition(progress)) return;
+  const pct = Math.max(0, Math.min(1, percentage));
+  const bucket = Math.round(pct * 1000);
+  db.prepare(
+    `INSERT INTO progress_samples (user_id, document, pct_bucket, percentage, progress, position, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, document, pct_bucket) DO UPDATE SET
+       percentage = excluded.percentage,
+       progress = excluded.progress,
+       position = excluded.position,
+       updated_at = excluded.updated_at`
+  ).run(userId, document, bucket, pct, progress, position, updatedAt);
+}
+
+/**
+ * Find the real position whose recorded percentage is closest to `pct`. Used to
+ * turn a percentage-only fan-in update into a position stock KOReader can seek
+ * to. Returns null when we've never seen a real position for this document.
+ */
+export function nearestProgressSample(
+  db: DB,
+  userId: number,
+  document: string,
+  pct: number
+): { progress: string; position: string | null; percentage: number } | null {
+  const row = db
+    .prepare(
+      `SELECT progress, position, percentage
+       FROM progress_samples
+       WHERE user_id = ? AND document = ?
+       ORDER BY ABS(percentage - ?) ASC
+       LIMIT 1`
+    )
+    .get(userId, document, Math.max(0, Math.min(1, pct))) as
+    | { progress: string; position: string | null; percentage: number }
+    | undefined;
+  return row ?? null;
+}
+
 export function upsertProgress(db: DB, p: ProgressUpsert): void {
   db.prepare(
     `INSERT INTO progress (user_id, document, device_id, device, percentage, progress, position, updated_at)
@@ -189,6 +253,17 @@ export function kosyncRoutes(db: DB, config: Config): Hono<AppEnv> {
       return kosyncError(c, 403, parsed.code, parsed.message);
     }
     upsertProgress(db, parsed.record);
+    // Harvest this real device position as a (percentage -> position) sample so
+    // fan-in can later replay a real position for a percentage-only update.
+    recordProgressSample(
+      db,
+      user.id,
+      parsed.record.document,
+      parsed.record.percentage,
+      parsed.record.progress,
+      parsed.record.position,
+      parsed.record.updatedAt
+    );
     fanOutProgress(db, user.id, parsed.record.document, parsed.record.percentage, parsed.record.updatedAt, parsed.record.progress, parsed.record.position);
     return c.json({ document: parsed.record.document, timestamp: parsed.record.updatedAt });
   });

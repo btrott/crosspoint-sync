@@ -2,7 +2,7 @@ import type { DB } from '../db/db.js';
 import { nowSeconds } from '../models/sync.js';
 import { getConnector, fetchTransport } from './registry.js';
 import { fanOutProgress } from './fanout.js';
-import { upsertProgress } from '../routes/kosync.js';
+import { nearestProgressSample, upsertProgress } from '../routes/kosync.js';
 import {
   decryptCredential,
   documentForExternal,
@@ -56,16 +56,21 @@ export async function pollConnector(
     if (current != null && Math.abs(current - pct) < ECHO_EPSILON) continue; // echo of our own push
 
     const now = nowSeconds();
+    // Translate the percentage into a REAL position we've seen for this document
+    // (nearest-percentage sample from a device push), so stock KOReader can seek
+    // to it. CrossPoint maps by percentage regardless, but plain KOReader needs a
+    // valid xpointer/page. Fall back to a synthetic string when we have no sample
+    // yet (a percentage-mapping reader still handles it; stock KOReader can't, but
+    // there's nothing better to give it until a real device reports a position).
+    const sample = nearestProgressSample(db, userId, document, pct);
     upsertProgress(db, {
       userId,
       document,
       deviceId: connectorId,
       device: conn.displayName,
       percentage: pct,
-      // Synthetic progress string; the reader maps by percentage when the xpath
-      // isn't its own. Prefixed so it's identifiable.
-      progress: `${connectorId}:${Math.round(pct * 1_000_000)}`,
-      position: null,
+      progress: sample?.progress ?? `${connectorId}:${Math.round(pct * 1_000_000)}`,
+      position: sample?.position ?? null,
       metadata: null,
       updatedAt: now,
     });

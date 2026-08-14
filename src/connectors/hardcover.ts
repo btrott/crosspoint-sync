@@ -208,14 +208,20 @@ interface Edition {
   pages: number;
 }
 
-/** Pick an edition with a page count, following the plugin's priority order. */
+/**
+ * Pick an edition with a page count, in priority order: the reader's own
+ * edition, the book's defaults, then ANY edition of the book that has pages.
+ * Scanning all fetched editions (not just the most popular one) matters because
+ * many books have some editions with page counts and some without - looking at
+ * only the top edition silently loses progress for the rest.
+ */
 function pickEdition(meUb: any, data: any): Edition | null {
   const candidates = [
     meUb?.user_book_reads?.[0]?.edition,
     meUb?.edition,
     data?.books_by_pk?.default_ebook_edition,
     data?.books_by_pk?.default_physical_edition,
-    data?.editions?.[0],
+    ...(Array.isArray(data?.editions) ? data.editions : []),
   ];
   for (const e of candidates) {
     if (e && e.id != null && typeof e.pages === 'number' && e.pages > 0) {
@@ -267,7 +273,11 @@ async function push(
          default_ebook_edition { id pages }
          default_physical_edition { id pages }
        }
-       editions(where: { book_id: { _eq: $bookId } }, order_by: { users_count: desc_nulls_last }, limit: 1) {
+       editions(
+         where: { book_id: { _eq: $bookId }, pages: { _is_null: false } }
+         order_by: { users_count: desc_nulls_last }
+         limit: 20
+       ) {
          id pages
        }
      }`,
@@ -324,7 +334,11 @@ async function push(
 
   if (!edition) {
     // Shelf status is synced, but no edition with a known page count exists, so
-    // Hardcover has no denominator for a percentage. Nothing more we can do.
+    // Hardcover has no denominator for a percentage. Log it (this is otherwise
+    // an invisible "synced but progress never moves") and move on.
+    console.warn(
+      JSON.stringify({ msg: 'hardcover: no paged edition, progress skipped', bookId })
+    );
     return { ok: true };
   }
   const progressPages = Math.max(0, Math.min(edition.pages, Math.floor(pct * edition.pages)));
