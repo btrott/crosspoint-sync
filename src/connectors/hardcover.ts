@@ -264,7 +264,7 @@ async function push(
            id
            status_id
            edition { id pages }
-           user_book_reads(order_by: { id: desc }, limit: 1) {
+           user_book_reads(where: { finished_at: { _is_null: true } }, order_by: { id: asc }, limit: 1) {
              id started_at finished_at edition { id pages }
            }
          }
@@ -290,13 +290,17 @@ async function push(
   let userBookId: number | undefined = meUb?.id;
   const currentStatus: number | undefined =
     typeof meUb?.status_id === 'number' ? meUb.status_id : undefined;
-  const latestRead = meUb?.user_book_reads?.[0];
-  const latestReadId: number | undefined = latestRead?.id;
+  // The OLDEST still-open read is the one Hardcover treats as current and shows
+  // on the book (it creates this read itself when a book becomes "reading").
+  let openRead = meUb?.user_book_reads?.[0];
   const edition = pickEdition(meUb, ctx.data);
 
   // 2) Set the shelf status ONLY when it needs to change. Never re-mark a book
   //    that is already in the desired status, and never downgrade a finished
-  //    book back to "reading".
+  //    book back to "reading". A status change makes Hardcover auto-create an
+  //    empty read, so we re-fetch afterward and update THAT one - otherwise we
+  //    end up with a duplicate (our read + Hardcover's, which is the one shown).
+  let statusTouched = false;
   if (!userBookId) {
     // Not on a shelf yet: add it with the desired status.
     const ubRes = await gql(
@@ -312,6 +316,7 @@ async function push(
     const a = classify(ubRes);
     if (a && !a.ok && a.needsReauth) return a;
     userBookId = ubRes.data?.insert_user_book?.user_book?.id;
+    statusTouched = true;
   } else if (
     currentStatus !== desiredStatus &&
     !(desiredStatus === STATUS_READING && currentStatus === STATUS_READ)
@@ -330,7 +335,30 @@ async function push(
     );
     const a = classify(upd);
     if (a && !a.ok && a.needsReauth) return a;
+    statusTouched = true;
   }
+
+  // If we just changed the status, Hardcover may have created a fresh open read.
+  // Re-fetch the oldest open read so we UPDATE it instead of inserting our own.
+  if (statusTouched) {
+    const re = await gql(
+      http,
+      token,
+      `query OpenRead($bookId: Int!) {
+         me {
+           user_books(where: { book_id: { _eq: $bookId } }, limit: 1) {
+             user_book_reads(where: { finished_at: { _is_null: true } }, order_by: { id: asc }, limit: 1) {
+               id started_at finished_at edition { id pages }
+             }
+           }
+         }
+       }`,
+      { bookId }
+    );
+    const refetched = re.data?.me?.[0]?.user_books?.[0]?.user_book_reads?.[0];
+    if (refetched) openRead = refetched;
+  }
+  const openReadId: number | undefined = openRead?.id;
 
   if (!edition) {
     // Shelf status is synced, but no edition with a known page count exists, so
@@ -350,8 +378,8 @@ async function push(
   //    entry. So we always pass it: the existing start date when there is one,
   //    else today. Update the current open read, or start a new one.
   let res;
-  if (latestReadId && !latestRead?.finished_at) {
-    const startedAt = latestRead?.started_at || today; // preserve, else backfill
+  if (openReadId) {
+    const startedAt = openRead?.started_at || today; // preserve, else backfill
     res = await gql(
       http,
       token,
@@ -361,7 +389,7 @@ async function push(
            user_book_read { id }
          }
        }`,
-      { id: latestReadId, pages: progressPages, editionId: edition.id, startedAt }
+      { id: openReadId, pages: progressPages, editionId: edition.id, startedAt }
     );
   } else {
     if (!userBookId) return { ok: false, retryable: true, error: 'no user_book to attach a read to' };

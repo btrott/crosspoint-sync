@@ -538,6 +538,37 @@ describe('hardcover progress push', () => {
     expect(upd!.body).toContain('"pages":300');
   });
 
+  it('updates Hardcover\'s auto-created read after a status change instead of inserting a duplicate', async () => {
+    const fake = fakeTransport();
+    // Book is "want to read" (status 1) with no open read yet.
+    fake.on('Ctx', 200, {
+      data: {
+        me: [{ user_books: [{ id: 10, status_id: 1, edition: { id: 5, pages: 300 }, user_book_reads: [] }] }],
+        books_by_pk: {}, editions: [],
+      },
+    });
+    fake.on('UpdStatus', 200, { data: { update_user_book: { user_book: { id: 10 } } } });
+    // After we set it to reading, Hardcover auto-created read 555.
+    fake.on('OpenRead', 200, {
+      data: { me: [{ user_books: [{ user_book_reads: [{ id: 555, started_at: null, finished_at: null, edition: { id: 5, pages: 300 } }] }] }] },
+    });
+    fake.on('UpdRead', 200, { data: { update_user_book_read: { error: null, user_book_read: { id: 555 } } } });
+
+    const r = await hardcoverConnector.push(
+      { token: 't' },
+      { externalId: '42', confidence: 1 },
+      { kind: 'progress', document: 'd', percentage: 0.5, timestamp: 1_754_000_000 },
+      fake.transport
+    );
+    expect(r.ok).toBe(true);
+    // We advance status and then UPDATE the auto-created read - never insert one.
+    expect(fake.calls.some((c) => c.body?.includes('UpdStatus'))).toBe(true);
+    expect(fake.calls.some((c) => c.body?.includes('InsRead'))).toBe(false);
+    const upd = fake.calls.find((c) => c.body?.includes('UpdRead'));
+    expect(upd!.body).toContain('"id":555');
+    expect(upd!.body).toContain('"pages":150');
+  });
+
   it('still succeeds (status only) when no edition has a page count', async () => {
     const fake = fakeTransport();
     fake.on('Ctx', 200, { data: { me: [{ user_books: [] }], books_by_pk: {}, editions: [] } });
