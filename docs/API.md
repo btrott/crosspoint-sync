@@ -93,13 +93,19 @@ Validates credentials. `200 {"authorized": "OK"}` or `401`.
   "metadata": {
     "filename": "Foundryside - Robert Jackson Bennett.epub",
     "title": "Foundryside",
-    "authors": "Robert Jackson Bennett"
+    "authors": "Robert Jackson Bennett",
+    "bookfusion_id": "36835"
   }
   ```
 
-  All fields optional strings (≤512 chars). Stored per `(user, document)`; fields the client
-  omits never overwrite previously stored values. Retrieve via `GET /api/v1/documents` or joined
-  into `GET /api/v1/progress`.
+  All fields optional strings (≤512 chars). `filename`/`title`/`authors` are stored per
+  `(user, document)`; fields the client omits never overwrite previously stored values. Retrieve
+  via `GET /api/v1/documents` or joined into `GET /api/v1/progress`.
+
+  **Service ids.** Any extra `<service>_id` field (from a CrossPoint plugin's book sidecar,
+  e.g. `bookfusion_id`) pre-seeds an exact match for the connector of that name: progress is
+  pushed straight to that record, skipping title/author search. Unknown-connector ids are
+  ignored; a user's manual match is never overridden.
 
 ### GET /syncs/progress/{document}
 

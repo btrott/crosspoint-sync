@@ -129,3 +129,67 @@ describe('GET /api/v1/progress (document list)', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('plugin sidecar service ids seed connector matches', () => {
+  it('a bookfusion_id in metadata pre-seeds an exact match (no fuzzy search)', async () => {
+    const { app, db } = makeTestApp();
+    const { headers } = await registerUser(app);
+    const res = await app.request('/syncs/progress', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        ...PUT_BODY,
+        metadata: { ...METADATA, bookfusion_id: '36835', source: 'bookfusion' },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const row = db
+      .prepare(
+        'SELECT external_id, source, confidence FROM connector_matches WHERE connector_id = ? AND document = ?'
+      )
+      .get('bookfusion', DOC) as
+      | { external_id: string; source: string; confidence: number }
+      | undefined;
+    expect(row).toMatchObject({ external_id: '36835', source: 'sidecar', confidence: 1 });
+  });
+
+  it('ignores *_id fields for unknown connectors', async () => {
+    const { app, db } = makeTestApp();
+    const { headers } = await registerUser(app);
+    await app.request('/syncs/progress', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ ...PUT_BODY, metadata: { ...METADATA, nonsense_id: 'x' } }),
+    });
+    const count = db
+      .prepare('SELECT COUNT(*) AS n FROM connector_matches WHERE document = ?')
+      .get(DOC) as { n: number };
+    expect(count.n).toBe(0);
+  });
+
+  it('does not overwrite a manual match', async () => {
+    const { app, db } = makeTestApp();
+    const { headers } = await registerUser(app);
+    // Establish a document + a manual match first.
+    await app.request('/syncs/progress', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ ...PUT_BODY, metadata: METADATA }),
+    });
+    const userId = (db.prepare('SELECT id FROM users LIMIT 1').get() as { id: number }).id;
+    db.prepare(
+      `INSERT INTO connector_matches (user_id, connector_id, document, external_id, confidence, source, updated_at)
+       VALUES (?, 'bookfusion', ?, 'manual-42', 1, 'manual', 0)`
+    ).run(userId, DOC);
+    // A later sidecar id must not clobber the user's pick.
+    await app.request('/syncs/progress', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ ...PUT_BODY, metadata: { ...METADATA, bookfusion_id: '36835' } }),
+    });
+    const row = db
+      .prepare('SELECT external_id, source FROM connector_matches WHERE connector_id = ? AND document = ?')
+      .get('bookfusion', DOC) as { external_id: string; source: string };
+    expect(row).toMatchObject({ external_id: 'manual-42', source: 'manual' });
+  });
+});

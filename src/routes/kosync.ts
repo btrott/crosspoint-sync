@@ -12,6 +12,8 @@ import { hashKey } from '../auth/password.js';
 import { parsePosition } from '../models/position.js';
 import { nowSeconds } from '../models/sync.js';
 import { fanOutProgress } from '../connectors/fanout.js';
+import { seedSidecarMatches } from '../connectors/store.js';
+import { getConnector } from '../connectors/registry.js';
 
 export const USERNAME_RE = /^[A-Za-z0-9._@+-]{1,64}$/;
 
@@ -37,18 +39,39 @@ export interface DocumentMetadata {
   filename: string | null;
   title: string | null;
   authors: string | null;
+  /**
+   * Service book ids from the CrossPoint plugin sidecar ("<book>.meta.json"),
+   * keyed by service name. A plugin that downloads a book records e.g.
+   * `{"bookfusion_id": "36835"}`; the firmware forwards any `<service>_id`
+   * field here so we can push progress to that exact record instead of
+   * fuzzy-matching by title. Empty when no sidecar id was sent.
+   */
+  externalIds: Record<string, string>;
 }
+
+// Sidecar convention: a flat `<service>_id` field names the connector
+// ("bookfusion_id" -> connector "bookfusion"). Reserved keys are not ids.
+const RESERVED_META_KEYS = new Set(['filename', 'title', 'authors', 'source']);
 
 function parseMetadata(raw: unknown): DocumentMetadata | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const o = raw as Record<string, unknown>;
   const str = (v: unknown) => (typeof v === 'string' && v.length > 0 ? v.slice(0, 512) : null);
+  const externalIds: Record<string, string> = {};
+  for (const [key, value] of Object.entries(o)) {
+    if (RESERVED_META_KEYS.has(key)) continue;
+    const m = /^([a-z0-9]+)_id$/.exec(key);
+    const id = str(value);
+    if (m && id) externalIds[m[1]] = id;
+  }
   const meta: DocumentMetadata = {
     filename: str(o.filename),
     title: str(o.title),
     authors: str(o.authors),
+    externalIds,
   };
-  return meta.filename || meta.title || meta.authors ? meta : null;
+  const hasId = Object.keys(externalIds).length > 0;
+  return meta.filename || meta.title || meta.authors || hasId ? meta : null;
 }
 
 /** Stores progress-PUT metadata without clobbering fields the client didn't send. */
@@ -147,6 +170,18 @@ export function upsertProgress(db: DB, p: ProgressUpsert): void {
   ).run(p.userId, p.document, p.deviceId, p.device, p.percentage, p.progress, p.position, p.updatedAt);
   if (p.metadata) {
     upsertDocumentMetadata(db, p.userId, p.document, p.metadata, p.updatedAt);
+    // Exact service ids from the plugin sidecar bypass fuzzy matching: seed the
+    // connector match cache so the runner pushes straight to that record.
+    if (Object.keys(p.metadata.externalIds).length > 0) {
+      seedSidecarMatches(
+        db,
+        p.userId,
+        p.document,
+        p.metadata.externalIds,
+        (id) => getConnector(id) !== undefined,
+        p.updatedAt
+      );
+    }
   }
 }
 

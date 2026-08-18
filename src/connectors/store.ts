@@ -99,6 +99,11 @@ export interface MatchRow {
   updated_at: number;
 }
 
+// How a match was resolved. 'sidecar' = an exact service id the device sent in
+// the book's plugin sidecar; it outranks fuzzy 'auto' search but yields to a
+// user's 'manual' pick.
+export type MatchSource = 'auto' | 'manual' | 'none' | 'sidecar';
+
 export function getMatch(
   db: DB,
   userId: number,
@@ -120,7 +125,7 @@ export function saveMatch(
   connectorId: string,
   document: string,
   match: Match | null,
-  source: 'auto' | 'manual' | 'none',
+  source: MatchSource,
   now = nowSeconds()
 ): void {
   db.prepare(
@@ -145,6 +150,38 @@ export function saveMatch(
     match?.queryUsed ?? null,
     now
   );
+}
+
+/**
+ * Pre-seed the match cache from the exact service ids a device sent in a book's
+ * plugin sidecar (`externalIds`, keyed by connector id). This lets the runner
+ * push to the right record without a fuzzy title search. Only connectors that
+ * exist are seeded. A user's manual pick is never overwritten; an unchanged id
+ * is left alone so its updated_at (and any richer edition) survives.
+ */
+export function seedSidecarMatches(
+  db: DB,
+  userId: number,
+  document: string,
+  externalIds: Record<string, string>,
+  connectorExists: (id: string) => boolean,
+  now = nowSeconds()
+): void {
+  for (const [connectorId, externalId] of Object.entries(externalIds)) {
+    if (!externalId || !connectorExists(connectorId)) continue;
+    const existing = getMatch(db, userId, connectorId, document);
+    if (existing && existing.source === 'manual') continue; // respect user choice
+    if (existing && existing.external_id === externalId && existing.source === 'sidecar') continue;
+    saveMatch(
+      db,
+      userId,
+      connectorId,
+      document,
+      { externalId, confidence: 1 },
+      'sidecar',
+      now
+    );
+  }
 }
 
 export function listMatches(db: DB, userId: number, connectorId: string): MatchRow[] {
