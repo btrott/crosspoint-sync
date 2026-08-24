@@ -8,6 +8,10 @@ import { kosyncConnector, baseUrl } from '../src/connectors/kosync.js';
 import { bookfusionConnector, extractBooks } from '../src/connectors/bookfusion.js';
 import { hardcoverConnector } from '../src/connectors/hardcover.js';
 import { audiobookshelfConnector, baseUrl as absBaseUrl } from '../src/connectors/audiobookshelf.js';
+import {
+  grimmoryConnector,
+  baseUrl as grimmoryBaseUrl,
+} from '../src/connectors/grimmory.js';
 import { pollConnector } from '../src/connectors/fanin.js';
 import { saveMatch } from '../src/connectors/store.js';
 
@@ -89,6 +93,153 @@ describe('kosync mirror fan-out (end to end)', () => {
     // A mirror PUT to the target server happened.
     expect(fake.calls.some((c) => c.url.includes('mirror.test') && c.url.includes('/syncs/progress') && c.method === 'PUT')).toBe(true);
     expect(claimReady(db, 10)).toHaveLength(0);
+  });
+});
+
+describe('Grimmory connector', () => {
+  const CRED = {
+    server: 'books.test/api/koreader',
+    kosync_username: 'reader',
+    kosync_password: 'reader-pass',
+    opds_username: 'opds',
+    opds_password: 'opds-pass',
+  };
+
+  it('normalizes both Grimmory root and KOReader URLs', () => {
+    expect(grimmoryBaseUrl('books.test/')).toBe('https://books.test');
+    expect(grimmoryBaseUrl('https://books.test/api/koreader')).toBe('https://books.test');
+  });
+
+  it('validates the KOReader and OPDS accounts', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/koreader/users/auth', 200, {});
+    fake.on('/komga/api/v2/users/me', 200, { email: 'opds@grimmory.local' });
+    const result = await grimmoryConnector.validate(CRED, fake.transport);
+    expect(result).toMatchObject({ ok: true });
+    expect(result.accountLabel).toContain('opds');
+    expect(fake.calls.map((c) => c.url)).toEqual([
+      'https://books.test/api/koreader/users/auth',
+      'https://books.test/komga/api/v2/users/me',
+    ]);
+  });
+
+  it('matches metadata to a stable Grimmory book id', async () => {
+    const fake = fakeTransport();
+    fake.on('/komga/api/v1/books?', 200, {
+      content: [
+        {
+          id: '123',
+          name: 'Foundryside',
+          fileHash: 'old-hash-is-not-cached',
+          metadata: {
+            title: 'Foundryside',
+            authors: [{ name: 'Robert Jackson Bennett', role: 'writer' }],
+          },
+        },
+      ],
+      last: true,
+    });
+    const result = await grimmoryConnector.match(
+      CRED,
+      { document: DOC, title: 'Foundryside', author: 'Robert Jackson Bennett', filename: null },
+      fake.transport
+    );
+    expect(result).toMatchObject({ externalId: '123', title: 'Foundryside' });
+    expect(result?.externalEdition).toBeUndefined();
+  });
+
+  it('refreshes fileHash and pushes it as the KOReader document id', async () => {
+    const fake = fakeTransport();
+    fake.on('/komga/api/v1/books/123?', 200, {
+      id: '123',
+      name: 'Foundryside',
+      fileHash: '2a376e11223344556677889900aabbcc',
+      metadata: { title: 'Foundryside', authors: [] },
+    });
+    fake.on('/api/koreader/syncs/progress', 200, {});
+    const result = await grimmoryConnector.push(
+      CRED,
+      { externalId: '123', confidence: 1 },
+      { kind: 'progress', document: DOC, percentage: 0.42, progress: '/body/p[7]', timestamp: 1 },
+      fake.transport
+    );
+    expect(result).toEqual({ ok: true });
+    const push = fake.calls.find((c) => c.url.includes('/syncs/progress'));
+    expect(JSON.parse(push!.body!)).toMatchObject({
+      document: '2a376e11223344556677889900aabbcc',
+      progress: '/body/p[7]',
+      percentage: 0.42,
+      device_id: 'crosspoint-sync-grimmory',
+    });
+  });
+
+  it('matches and translates a filename-based document end to end', async () => {
+    const fake = fakeTransport();
+    fake.on('/api/koreader/users/auth', 200, {});
+    fake.on('/komga/api/v2/users/me', 200, { email: 'opds@grimmory.local' });
+    fake.on('/komga/api/v1/books?', 200, {
+      content: [
+        {
+          id: '123',
+          name: 'Foundryside',
+          metadata: {
+            title: 'Foundryside',
+            authors: [{ name: 'Robert Jackson Bennett', role: 'writer' }],
+          },
+        },
+      ],
+      last: true,
+    });
+    fake.on('/komga/api/v1/books/123?', 200, {
+      id: '123',
+      name: 'Foundryside',
+      fileHash: '2a376e11223344556677889900aabbcc',
+      metadata: { title: 'Foundryside', authors: [] },
+    });
+    fake.on('/api/koreader/syncs/progress', 200, {});
+
+    const { app, db } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    const linked = await app.request('/api/v1/connectors/grimmory', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ credential: CRED }),
+    });
+    expect(linked.status).toBe(200);
+    await app.request('/api/v1/documents', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        items: [
+          {
+            document: DOC,
+            filename: 'Foundryside.optimized.epub',
+            title: 'Foundryside',
+            author: 'Robert Jackson Bennett',
+          },
+        ],
+      }),
+    });
+    await app.request('/syncs/progress', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        document: DOC,
+        progress: '/body/p[9]',
+        percentage: 0.5,
+        device_id: 'xteink',
+      }),
+    });
+    await drainQueue(db, fake.transport, 10);
+
+    const match = db
+      .prepare('SELECT external_id FROM connector_matches WHERE connector_id = ? AND document = ?')
+      .get('grimmory', DOC) as { external_id: string };
+    expect(match.external_id).toBe('123');
+    const pushed = fake.calls.find(
+      (call) => call.method === 'PUT' && call.url.includes('/api/koreader/syncs/progress')
+    );
+    expect(JSON.parse(pushed!.body!).document).toBe('2a376e11223344556677889900aabbcc');
   });
 });
 
