@@ -200,6 +200,7 @@ function classify(r: { status: number; errors?: { message: string }[] }): PushRe
   if (r.status === 429) return { ok: false, retryable: true, error: 'rate limited' };
   if (r.status >= 500) return { ok: false, retryable: true, error: `server ${r.status}` };
   if (r.errors?.length) return { ok: false, retryable: false, error: r.errors[0].message };
+  if (r.status >= 400) return { ok: false, retryable: false, error: `http ${r.status}` };
   return null;
 }
 
@@ -283,8 +284,8 @@ async function push(
      }`,
     { bookId }
   );
-  const ctxAuth = classify(ctx);
-  if (ctxAuth && !ctxAuth.ok && ctxAuth.needsReauth) return ctxAuth;
+  const ctxError = classify(ctx);
+  if (ctxError) return ctxError;
 
   const meUb = ctx.data?.me?.[0]?.user_books?.[0];
   let userBookId: number | undefined = meUb?.id;
@@ -308,13 +309,16 @@ async function push(
       token,
       `mutation SetStatus($bookId: Int!, $statusId: Int!) {
          insert_user_book(object: { book_id: $bookId, status_id: $statusId }) {
+           error
            user_book { id }
          }
        }`,
       { bookId, statusId: desiredStatus }
     );
     const a = classify(ubRes);
-    if (a && !a.ok && a.needsReauth) return a;
+    if (a) return a;
+    const opError = ubRes.data?.insert_user_book?.error;
+    if (opError) return { ok: false, retryable: false, error: String(opError) };
     userBookId = ubRes.data?.insert_user_book?.user_book?.id;
     statusTouched = true;
   } else if (
@@ -328,13 +332,16 @@ async function push(
       token,
       `mutation UpdStatus($id: Int!, $statusId: Int!) {
          update_user_book(id: $id, object: { status_id: $statusId }) {
+           error
            user_book { id }
          }
        }`,
       { id: userBookId, statusId: desiredStatus }
     );
     const a = classify(upd);
-    if (a && !a.ok && a.needsReauth) return a;
+    if (a) return a;
+    const opError = upd.data?.update_user_book?.error;
+    if (opError) return { ok: false, retryable: false, error: String(opError) };
     statusTouched = true;
   }
 
@@ -352,11 +359,19 @@ async function push(
              }
            }
          }
-       }`,
+      }`,
       { bookId }
     );
+    const refetchError = classify(re);
+    if (refetchError) return refetchError;
     const refetched = re.data?.me?.[0]?.user_books?.[0]?.user_book_reads?.[0];
-    if (refetched) openRead = refetched;
+    if (refetched) {
+      openRead = refetched;
+    } else if (desiredStatus === STATUS_READING && edition) {
+      // Do not race Hardcover's side-effect by inserting our own read. Retry so
+      // the next context query can see and update the session it just created.
+      return { ok: false, retryable: true, error: 'open read missing after status update' };
+    }
   }
   const openReadId: number | undefined = openRead?.id;
 
