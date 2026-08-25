@@ -5,6 +5,7 @@ import { kosyncConnector } from './kosync.js';
 import { bookfusionConnector } from './bookfusion.js';
 import { audiobookshelfConnector } from './audiobookshelf.js';
 import { grimmoryConnector } from './grimmory.js';
+import { bookkeepConnector } from './bookkeep.js';
 
 /** All connectors known to this build. */
 const CONNECTORS: Connector[] = [
@@ -14,6 +15,7 @@ const CONNECTORS: Connector[] = [
   bookfusionConnector,
   audiobookshelfConnector,
   grimmoryConnector,
+  bookkeepConnector,
 ];
 
 const byId = new Map(CONNECTORS.map((c) => [c.id, c]));

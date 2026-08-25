@@ -542,6 +542,7 @@ const HINTS = {
   readwise: 'Paste your Readwise access token from readwise.io/access_token. Syncs your highlights.',
   kosync: 'Mirror your reading progress to another KOReader-compatible (KOSync) server, so your other devices see it too.',
   grimmory: 'Sync optimized EPUBs to Grimmory by matching their metadata to your library and translating them to Grimmory’s current file hashes.',
+  bookkeep: 'Sync reading progress and finished books to your Bookkeep library. Generate an API token on Bookkeep’s profile page before linking.',
   bookfusion: 'Connect your BookFusion account to sync reading progress. You will approve the request on bookfusion.com.',
   audiobookshelf: 'Sync your reading position to the matching audiobook on your Audiobookshelf server. Create an API key in Audiobookshelf under Settings, Users, API Keys.'
 };
@@ -580,13 +581,19 @@ function render(conn) {
       const r = await jsend('/api/v1/connectors/' + ID, 'PUT', { credential: { server: $('srv').value.trim(), username: $('u').value.trim(), password: $('p').value } });
       if (r.ok) done(); else $('e').textContent = r.data.message || 'Could not connect';
     };
-  } else if (conn.credential_kind === 'abs') {
-    f.innerHTML = '<label>Server URL</label><input id="srv" class="mono" placeholder="https://audiobookshelf.example.com">'
-      + '<div style="margin-top:10px"><label>API key</label><input id="tok" class="mono" type="password" placeholder="paste API key"></div>'
-      + '<button class="primary full mt" id="go">Connect Audiobookshelf</button><div class="err" id="e"></div>';
+  } else if (conn.credential_kind === 'abs' || conn.credential_kind === 'bookkeep') {
+    const isBookkeep = conn.credential_kind === 'bookkeep';
+    const service = isBookkeep ? 'Bookkeep' : 'Audiobookshelf';
+    const placeholder = isBookkeep ? 'https://bookkeep.example.com' : 'https://audiobookshelf.example.com';
+    f.innerHTML = '<label>Server URL</label><input id="srv" class="mono" placeholder="' + placeholder + '">'
+      + '<div style="margin-top:10px"><label>API token</label><input id="tok" class="mono" type="password" placeholder="paste API token"></div>'
+      + '<button class="primary full mt" id="go">Connect ' + service + '</button><div class="err" id="e"></div>';
     $('go').onclick = async () => {
       $('e').textContent = '';
-      const r = await jsend('/api/v1/connectors/' + ID, 'PUT', { credential: { server: $('srv').value.trim(), token: $('tok').value.trim() } });
+      const credential = isBookkeep
+        ? { baseUrl: $('srv').value.trim(), token: $('tok').value.trim() }
+        : { server: $('srv').value.trim(), token: $('tok').value.trim() };
+      const r = await jsend('/api/v1/connectors/' + ID, 'PUT', { credential });
       if (r.ok) done(); else $('e').textContent = r.data.message || 'Could not connect';
     };
   } else if (conn.credential_kind === 'grimmory') {

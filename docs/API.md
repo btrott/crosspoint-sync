@@ -413,6 +413,13 @@ connector-specific (`{"token": "..."}` for Hardcover and Readwise). The server v
 service before storing; returns `400` if rejected. `{"id": "hardcover", "linked": true,
 "account": "julia"}` on success.
 
+Bookkeep requires its externally reachable server URL and a user API token generated on Bookkeep's
+`/profile` page. Use HTTPS outside local development:
+
+```json
+{"credential": {"baseUrl": "https://books.example.com", "token": "bkp_..."}}
+```
+
 Grimmory uses its existing APIs and requires both credential pairs:
 
 ```json

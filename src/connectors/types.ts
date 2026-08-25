@@ -15,6 +15,7 @@ export type CredentialKind =
   | 'kosync'
   | 'device_code'
   | 'abs'
+  | 'bookkeep'
   | 'grimmory';
 
 /** Interactive OAuth device-code link handshake (BookFusion). */
