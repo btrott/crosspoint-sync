@@ -40,7 +40,7 @@ const STYLE = `
     --ring:rgba(12,10,9,0.05);
   }
   * { box-sizing:border-box; }
-  html { -webkit-text-size-adjust:100%; }
+  html { -webkit-text-size-adjust:100%; scrollbar-gutter:stable; }
   body {
     margin:0; background:var(--stone-50); color:var(--stone-900);
     font-family:"InterVariable","Inter",ui-sans-serif,system-ui,sans-serif;
@@ -779,7 +779,8 @@ function bindChoose(btn) {
     renderList();
   };
 }
-</script>`
+</script>`,
+  true
 );
 
 export function webRoutes(): Hono<AppEnv> {
