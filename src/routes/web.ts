@@ -21,7 +21,7 @@ const FAVICON = fs.readFileSync(path.join(ASSETS_DIR, 'favicon.png'));
 // Service app icons, served at /icons/:id.png. Loaded once at boot; a missing
 // file just means no icon for that service (the UI falls back gracefully).
 const SERVICE_ICONS = new Map<string, Buffer>();
-for (const id of ['kosync', 'hardcover', 'audiobookshelf', 'bookfusion', 'readwise', 'grimmory']) {
+for (const id of ['kosync', 'hardcover', 'audiobookshelf', 'bookfusion', 'readwise', 'grimmory', 'bookkeep']) {
   try {
     SERVICE_ICONS.set(id, fs.readFileSync(path.join(ASSETS_DIR, 'icons', `${id}.png`)));
   } catch {
@@ -234,6 +234,9 @@ const LANDING = shell(
        <span class="pill">ready</span></div>
      <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/grimmory.png" alt="" width="34" height="34"><div><div class="name">Grimmory</div>
        <div class="desc">Match optimized EPUBs to your Grimmory library and keep their reading progress current.</div></div></div>
+       <span class="pill">ready</span></div>
+     <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/bookkeep.png" alt="" width="34" height="34"><div><div class="name">Bookkeep</div>
+       <div class="desc">Track your reading progress and finished books in your personal Bookkeep library.</div></div></div>
        <span class="pill">ready</span></div>
      <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/hardcover.png" alt="" width="34" height="34"><div><div class="name">Hardcover</div>
        <div class="desc">Keep your Hardcover shelf and reading progress up to date automatically.</div></div></div>
