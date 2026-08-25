@@ -413,6 +413,25 @@ connector-specific (`{"token": "..."}` for Hardcover and Readwise). The server v
 service before storing; returns `400` if rejected. `{"id": "hardcover", "linked": true,
 "account": "julia"}` on success.
 
+Grimmory uses its existing APIs and requires both credential pairs:
+
+```json
+{
+  "credential": {
+    "server": "https://books.example.com",
+    "kosync_username": "reader",
+    "kosync_password": "...",
+    "opds_username": "opds-reader",
+    "opds_password": "..."
+  }
+}
+```
+
+The Komga API must be enabled in Grimmory. CrossPoint Sync matches title/author through that API,
+stores the stable Grimmory book ID, fetches the book's current `fileHash` before every update, and
+then writes progress to Grimmory's KOReader API. This supports CrossPoint's filename matching and
+EPUB optimization without requiring a Grimmory change.
+
 #### DELETE /api/v1/connectors/{id}
 
 Unlink; wipes the stored credential, all matches, and queued work.

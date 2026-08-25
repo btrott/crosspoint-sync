@@ -222,6 +222,9 @@ const LANDING = shell(
      <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/kosync.png" alt="" width="34" height="34"><div><div class="name">Another KOSync server</div>
        <div class="desc">Mirror your progress to sync.koreader.rocks or your own server, so your other KOReader devices stay in sync too.</div></div></div>
        <span class="pill">ready</span></div>
+     <div class="svc"><div class="lead"><div><div class="name">Grimmory</div>
+       <div class="desc">Match optimized EPUBs to your Grimmory library and keep their reading progress current.</div></div></div>
+       <span class="pill">ready</span></div>
      <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/hardcover.png" alt="" width="34" height="34"><div><div class="name">Hardcover</div>
        <div class="desc">Keep your Hardcover shelf and reading progress up to date automatically.</div></div></div>
        <span class="pill warn">beta</span></div>
@@ -528,6 +531,7 @@ const HINTS = {
   hardcover: 'Paste your Hardcover API token from hardcover.app/account/api. Syncs your reading progress and shelf status.',
   readwise: 'Paste your Readwise access token from readwise.io/access_token. Syncs your highlights.',
   kosync: 'Mirror your reading progress to another KOReader-compatible (KOSync) server, so your other devices see it too.',
+  grimmory: 'Sync optimized EPUBs to Grimmory by matching their metadata to your library and translating them to Grimmory’s current file hashes.',
   bookfusion: 'Connect your BookFusion account to sync reading progress. You will approve the request on bookfusion.com.',
   audiobookshelf: 'Sync your reading position to the matching audiobook on your Audiobookshelf server. Create an API key in Audiobookshelf under Settings, Users, API Keys.'
 };
@@ -573,6 +577,28 @@ function render(conn) {
     $('go').onclick = async () => {
       $('e').textContent = '';
       const r = await jsend('/api/v1/connectors/' + ID, 'PUT', { credential: { server: $('srv').value.trim(), token: $('tok').value.trim() } });
+      if (r.ok) done(); else $('e').textContent = r.data.message || 'Could not connect';
+    };
+  } else if (conn.credential_kind === 'grimmory') {
+    f.innerHTML = '<label>Grimmory server URL</label><input id="srv" class="mono" placeholder="https://books.example.com">'
+      + '<p class="muted" style="margin:8px 0 0">Enable the Komga API in Grimmory before linking.</p>'
+      + '<div class="grp" style="margin-top:18px">KOReader sync account</div>'
+      + '<label>Username</label><input id="ku" autocomplete="off">'
+      + '<div style="margin-top:10px"><label>Password</label><input id="kp" type="password" autocomplete="off"></div>'
+      + '<div class="grp" style="margin-top:18px">OPDS account</div>'
+      + '<label>Username</label><input id="ou" autocomplete="off">'
+      + '<div style="margin-top:10px"><label>Password</label><input id="op" type="password" autocomplete="off"></div>'
+      + '<button class="primary full mt" id="go">Connect Grimmory</button><div class="err" id="e"></div>';
+    $('go').onclick = async () => {
+      $('e').textContent = '';
+      const credential = {
+        server: $('srv').value.trim(),
+        kosync_username: $('ku').value.trim(),
+        kosync_password: $('kp').value,
+        opds_username: $('ou').value.trim(),
+        opds_password: $('op').value
+      };
+      const r = await jsend('/api/v1/connectors/' + ID, 'PUT', { credential });
       if (r.ok) done(); else $('e').textContent = r.data.message || 'Could not connect';
     };
   } else if (conn.credential_kind === 'device_code') {

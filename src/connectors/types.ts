@@ -8,7 +8,14 @@ export type Capability = { read: boolean; write: boolean };
 /** What data types a connector carries (progress/shelves vs highlights). */
 export type DataKind = 'progress' | 'finished' | 'highlight';
 
-export type CredentialKind = 'token' | 'oauth' | 'cookies' | 'kosync' | 'device_code' | 'abs';
+export type CredentialKind =
+  | 'token'
+  | 'oauth'
+  | 'cookies'
+  | 'kosync'
+  | 'device_code'
+  | 'abs'
+  | 'grimmory';
 
 /** Interactive OAuth device-code link handshake (BookFusion). */
 export interface DeviceLinkStart {
