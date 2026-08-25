@@ -21,7 +21,7 @@ const FAVICON = fs.readFileSync(path.join(ASSETS_DIR, 'favicon.png'));
 // Service app icons, served at /icons/:id.png. Loaded once at boot; a missing
 // file just means no icon for that service (the UI falls back gracefully).
 const SERVICE_ICONS = new Map<string, Buffer>();
-for (const id of ['kosync', 'hardcover', 'audiobookshelf', 'bookfusion', 'readwise']) {
+for (const id of ['kosync', 'hardcover', 'audiobookshelf', 'bookfusion', 'readwise', 'grimmory']) {
   try {
     SERVICE_ICONS.set(id, fs.readFileSync(path.join(ASSETS_DIR, 'icons', `${id}.png`)));
   } catch {
@@ -167,6 +167,16 @@ const STYLE = `
   .lead { display:flex; gap:12px; align-items:flex-start; min-width:0; }
   .svc-icon { width:34px; height:34px; border-radius:8px; flex:0 0 auto; object-fit:cover;
     box-shadow:0 1px 2px rgba(0,0,0,0.12); background:#fff; }
+  .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-top:18px; }
+  .metric { background:#fff; border-radius:10px; box-shadow:0 0 0 1px var(--ring); padding:14px; }
+  .metric .value { font-family:"Lora",serif; font-size:24px; font-weight:600; line-height:1.1; }
+  .metric .label { color:var(--stone-500); font-size:11px; text-transform:uppercase;
+    letter-spacing:.04em; margin-top:5px; }
+  .book-stats { display:flex; flex-wrap:wrap; gap:6px 16px; color:var(--stone-500);
+    font-size:12px; margin-top:9px; }
+  .progress-track { height:5px; border-radius:999px; background:var(--stone-100); overflow:hidden; margin-top:10px; }
+  .progress-track span { display:block; height:100%; background:var(--brand-400); border-radius:inherit; }
+  @media (max-width:560px) { .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 `;
 
 function shell(title: string, body: string, wide = false): string {
@@ -222,7 +232,7 @@ const LANDING = shell(
      <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/kosync.png" alt="" width="34" height="34"><div><div class="name">Another KOSync server</div>
        <div class="desc">Mirror your progress to sync.koreader.rocks or your own server, so your other KOReader devices stay in sync too.</div></div></div>
        <span class="pill">ready</span></div>
-     <div class="svc"><div class="lead"><div><div class="name">Grimmory</div>
+     <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/grimmory.png" alt="" width="34" height="34"><div><div class="name">Grimmory</div>
        <div class="desc">Match optimized EPUBs to your Grimmory library and keep their reading progress current.</div></div></div>
        <span class="pill">ready</span></div>
      <div class="svc"><div class="lead"><img class="svc-icon" src="/icons/hardcover.png" alt="" width="34" height="34"><div><div class="name">Hardcover</div>
@@ -475,7 +485,7 @@ async function renderConnectors() {
       ? (c.status==='needs_reauth' ? '<span class="pill warn">needs reauth</span> ' : '') + '<a href="#" class="unlink-link" data-unlink="'+c.id+'">unlink</a>'
       : (c.experimental ? '<span class="pill warn">experimental</span>' : '');
     const action = c.linked
-      ? '<div class="row" style="justify-content:flex-end;gap:8px"><button class="ghost" data-review="'+c.id+'">Matches</button><button class="ghost" data-sync="'+c.id+'">Sync now</button></div>'
+      ? '<div class="row" style="justify-content:flex-end;gap:8px"><button class="ghost" data-review="'+c.id+'">Details</button><button class="ghost" data-sync="'+c.id+'">Sync now</button></div>'
       : '<button class="primary" data-link="'+c.id+'">Link</button>';
     return '<div class="card"><div class="row"><div class="lead"><img class="svc-icon" src="/icons/'+esc(c.id)+'.png" alt="" width="34" height="34" onerror="this.style.display=\\'none\\'"><div><div style="font-weight:600">'+esc(c.name)+' '+badge+
       '</div><div class="muted" style="margin-top:3px">syncs '+esc(c.carries.join(', '))+(c.account?' · '+esc(c.account):'')+'</div></div></div>'+action+'</div></div>';
@@ -634,12 +644,14 @@ async function startDeviceFlow() {
 );
 
 const REVIEW = shell(
-  'Matches',
+  'Service details',
   `<div><a class="muted" href="/account">&larr; Account</a></div>
-   <div style="margin-top:16px"><span class="eyebrow">Matches</span>
-     <h1 id="title">Matches</h1>
-     <p class="sub">Which book each of your synced titles maps to. Fix anything that matched wrong, or pick a match for the ones that didn't.</p></div>
-   <div id="list" style="margin-top:8px"><p class="muted">Loading…</p></div>
+   <div style="margin-top:16px"><span class="eyebrow">Linked service</span>
+     <div class="row" style="align-items:flex-end"><div><h1 id="title">Service details</h1>
+       <p class="sub">Sync health, matched books, and reading activity for this service.</p></div>
+       <button class="ghost" id="syncNow">Sync now</button></div></div>
+   <div id="summary"><div class="metrics"><div class="metric"><div class="value">…</div><div class="label">Loading</div></div></div></div>
+   <div id="list" style="margin-top:28px"><p class="muted">Loading…</p></div>
 
 <script>
 const ID = decodeURIComponent(location.pathname.split('/').pop());
@@ -647,6 +659,12 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 async function jget(u){ const r = await fetch(u); return { ok:r.ok, status:r.status, data: await r.json().catch(()=>({})) }; }
 async function jsend(u, m='PUT', body){ const r = await fetch(u,{method:m,headers:body?{'content-type':'application/json'}:undefined, body: body?JSON.stringify(body):undefined}); return { ok:r.ok, data: await r.json().catch(()=>({})) }; }
+function duration(seconds) {
+  if (!seconds) return '0m';
+  const h = Math.floor(seconds / 3600), m = Math.round((seconds % 3600) / 60);
+  return h ? h + 'h ' + m + 'm' : m + 'm';
+}
+function date(ts) { return ts ? new Date(ts * 1000).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' }) : ''; }
 
 let CONN = null, CANDIDATES = [], BOOKS = [];
 
@@ -655,7 +673,7 @@ let CONN = null, CANDIDATES = [], BOOKS = [];
   if (list.status === 409) { location.href = '/account'; return; }
   CONN = (list.data.connectors || []).find(c => c.id === ID);
   if (!CONN) { location.href = '/account'; return; }
-  $('title').textContent = CONN.name + ' matches';
+  $('title').textContent = CONN.name;
   // Preload the "currently reading" candidates for quick picking.
   const cand = await jget('/api/v1/connectors/' + ID + '/candidates');
   CANDIDATES = cand.data.books || [];
@@ -667,19 +685,57 @@ async function renderList() {
   const el = $('list');
   if (!ok) { el.innerHTML = '<p class="muted">Could not load.</p>'; return; }
   BOOKS = data.books || [];
+  const service = data.service || { matched:0, unmatched:0, queue:{ pending:0, done:0, dead:0 } };
+  $('summary').innerHTML = '<div class="metrics">'
+    + metric(service.matched, 'Matched books')
+    + metric(service.queue.done, 'Synced updates')
+    + metric(service.queue.pending, 'Pending')
+    + metric(service.queue.dead, 'Errors') + '</div>'
+    + (service.last_error ? '<div class="err">' + esc(service.last_error) + '</div>' : '');
   if (!BOOKS.length) { el.innerHTML = '<div class="card"><p class="muted" style="margin:0">No synced books yet. Read something on your device first.</p></div>'; return; }
-  el.innerHTML = data.books.map(b => {
+  const matched = BOOKS.filter(b => b.matched);
+  const unmatched = BOOKS.filter(b => !b.matched);
+  el.innerHTML = '<h2 style="${SECTION}margin-top:0">Matched books</h2>'
+    + (matched.length ? matched.map(bookCard).join('') : '<div class="card"><p class="muted" style="margin:0">No books matched yet.</p></div>')
+    + (unmatched.length ? '<h2 style="${SECTION}">Needs matching</h2>' + unmatched.map(bookCard).join('') : '');
+  el.querySelectorAll('[data-pick]').forEach(btn => btn.onclick = () => openPicker(btn.dataset.pick));
+}
+
+function metric(value, label) {
+  return '<div class="metric"><div class="value">' + esc(value) + '</div><div class="label">' + esc(label) + '</div></div>';
+}
+
+function bookCard(b) {
     const name = b.title ? esc(b.title) + (b.author ? ' <span class="muted">· ' + esc(b.author) + '</span>' : '') : '<span class="mono">' + esc(b.document.slice(0,12)) + '…</span>';
-    const state = b.matched
-      ? '<span class="pill ok">' + (b.source === 'manual' ? 'matched (manual)' : 'matched') + '</span>'
-      : '<span class="pill warn">not matched</span>';
+    const sync = b.sync || {};
+    const state = !b.matched ? '<span class="pill warn">not matched</span>'
+      : sync.dead ? '<span class="pill warn">sync error</span>'
+      : sync.pending ? '<span class="pill warn">queued</span>'
+      : sync.done ? '<span class="pill ok">synced</span>'
+      : '<span class="pill ok">matched</span>';
+    const stats = b.stats || {};
+    const details = [];
+    if (b.percentage != null) details.push(Math.round(b.percentage * 100) + '% read');
+    if (stats.seconds) details.push(duration(stats.seconds) + ' reading');
+    if (stats.pages) details.push(stats.pages + ' pages');
+    if (stats.sessions) details.push(stats.sessions + (stats.sessions === 1 ? ' session' : ' sessions'));
+    if (sync.last_synced_at) details.push('last synced ' + date(sync.last_synced_at));
     return '<div class="card"><div class="row"><div><div style="font-weight:600">' + name + ' ' + state + '</div>'
       + (b.matched ? '<div class="muted" style="margin-top:3px">id ' + esc(b.external_id) + '</div>' : '')
       + '</div><button class="ghost" data-pick="' + esc(b.document) + '">' + (b.matched ? 'Change' : 'Match') + '</button></div>'
+      + (b.percentage != null ? '<div class="progress-track"><span style="width:' + Math.max(0, Math.min(100, b.percentage * 100)) + '%"></span></div>' : '')
+      + (details.length ? '<div class="book-stats">' + details.map(x => '<span>' + esc(x) + '</span>').join('') + '</div>' : '')
+      + (sync.last_error ? '<div class="err" style="margin-bottom:0">' + esc(sync.last_error) + '</div>' : '')
       + '<div class="picker" id="pick-' + esc(b.document) + '" hidden style="margin-top:12px"></div></div>';
-  }).join('');
-  el.querySelectorAll('[data-pick]').forEach(btn => btn.onclick = () => openPicker(btn.dataset.pick));
 }
+
+$('syncNow').onclick = async () => {
+  const btn = $('syncNow'), original = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Syncing…';
+  const r = await jsend('/api/v1/connectors/' + ID + '/sync', 'POST');
+  btn.textContent = r.ok ? 'Queued ' + r.data.queued + ' ✓' : 'Failed';
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; renderList(); }, 1400);
+};
 
 function openPicker(doc) {
   const box = $('pick-' + doc);

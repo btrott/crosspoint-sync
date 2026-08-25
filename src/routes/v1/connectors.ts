@@ -18,6 +18,10 @@ import {
 } from '../../connectors/store.js';
 import { isValidDocument } from '../kosync.js';
 import type { HttpTransport } from '../../connectors/types.js';
+import {
+  combineBookStats,
+  type BookStatsSnapshot,
+} from '../../models/stats.js';
 
 /**
  * Master-sync-hub connector management. Same x-auth headers as the rest of v1.
@@ -180,41 +184,130 @@ export function connectorRoutes(db: DB, transport: HttpTransport = fetchTranspor
     });
   });
 
-  // Review list: every synced book with its title and this connector's match state.
+  // Service detail: every synced or matched book, with match, reading, and
+  // outbound queue stats. Starting from the union is important: a saved match
+  // must remain visible even when that book has no local progress row yet.
   app.get('/connectors/:id/review', (c) => {
     const conn = getConnector(c.req.param('id'));
     if (!conn) return c.json({ code: 2003, message: 'Unknown connector' }, 404);
     const user = c.get('user');
+    const account = getAccount(db, user.id, conn.id);
     const rows = db
       .prepare(
-        `SELECT p.document AS document, d.title AS title, d.author AS author,
-                m.external_id AS external_id, m.source AS source, m.confidence AS confidence
-         FROM progress p
-         LEFT JOIN documents d ON d.user_id = p.user_id AND d.document = p.document
-         LEFT JOIN connector_matches m ON m.user_id = p.user_id AND m.connector_id = ? AND m.document = p.document
-         WHERE p.user_id = ?
-         GROUP BY p.document
-         ORDER BY MAX(p.updated_at) DESC
-         LIMIT 500`
+        `WITH book_documents AS (
+           SELECT document FROM progress WHERE user_id = ?
+           UNION
+           SELECT document FROM connector_matches WHERE user_id = ? AND connector_id = ?
+         )
+         SELECT b.document, d.title, d.author,
+                p.percentage, p.updated_at AS progress_updated_at,
+                m.external_id, m.source, m.confidence, m.updated_at AS match_updated_at
+         FROM book_documents b
+         LEFT JOIN documents d ON d.user_id = ? AND d.document = b.document
+         LEFT JOIN progress p ON p.user_id = ? AND p.document = b.document
+           AND p.updated_at = (
+             SELECT MAX(p2.updated_at) FROM progress p2
+             WHERE p2.user_id = ? AND p2.document = b.document
+           )
+         LEFT JOIN connector_matches m ON m.user_id = ? AND m.connector_id = ? AND m.document = b.document
+         GROUP BY b.document
+         ORDER BY MAX(COALESCE(p.updated_at, m.updated_at, d.updated_at, 0)) DESC`
       )
-      .all(conn.id, user.id) as unknown as {
+      .all(user.id, user.id, conn.id, user.id, user.id, user.id, user.id, conn.id) as unknown as {
       document: string;
       title: string | null;
       author: string | null;
+      percentage: number | null;
+      progress_updated_at: number | null;
       external_id: string | null;
       source: string | null;
       confidence: number | null;
+      match_updated_at: number | null;
     }[];
+
+    const queueRows = db
+      .prepare(
+        `SELECT document, status, updated_at, last_error
+         FROM connector_queue WHERE user_id = ? AND connector_id = ?`
+      )
+      .all(user.id, conn.id) as unknown as {
+      document: string;
+      status: string;
+      updated_at: number;
+      last_error: string | null;
+    }[];
+    const queueByDocument = new Map<
+      string,
+      { pending: number; done: number; dead: number; last_synced_at: number | null; last_error: string | null }
+    >();
+    const queue = { pending: 0, done: 0, dead: 0 };
+    for (const q of queueRows) {
+      const totals = queueByDocument.get(q.document) ?? {
+        pending: 0,
+        done: 0,
+        dead: 0,
+        last_synced_at: null,
+        last_error: null,
+      };
+      if (q.status === 'pending') {
+        totals.pending++;
+        queue.pending++;
+      } else if (q.status === 'done') {
+        totals.done++;
+        queue.done++;
+        totals.last_synced_at = Math.max(totals.last_synced_at ?? 0, q.updated_at);
+      } else if (q.status === 'dead') {
+        totals.dead++;
+        queue.dead++;
+        if (q.last_error) totals.last_error = q.last_error;
+      }
+      queueByDocument.set(q.document, totals);
+    }
+
+    const statsRows = db
+      .prepare('SELECT document, payload FROM stats_device_book WHERE user_id = ?')
+      .all(user.id) as unknown as { document: string; payload: string }[];
+    const snapshotsByDocument = new Map<string, BookStatsSnapshot[]>();
+    for (const s of statsRows) {
+      try {
+        const snapshots = snapshotsByDocument.get(s.document) ?? [];
+        snapshots.push(JSON.parse(s.payload) as BookStatsSnapshot);
+        snapshotsByDocument.set(s.document, snapshots);
+      } catch {
+        // Ignore a corrupt historical snapshot rather than breaking the detail page.
+      }
+    }
+
+    const matched = rows.filter((r) => !!r.external_id).length;
     return c.json({
       connector: conn.id,
+      service: {
+        linked: !!account,
+        status: account?.status ?? null,
+        last_error: account?.last_error ?? null,
+        matched,
+        unmatched: rows.length - matched,
+        queue,
+      },
       books: rows.map((r) => ({
         document: r.document,
         title: r.title,
         author: r.author,
+        percentage: r.percentage,
+        progress_updated_at: r.progress_updated_at,
         matched: !!r.external_id,
         external_id: r.external_id,
         source: r.source ?? 'none',
         confidence: r.confidence ?? 0,
+        match_updated_at: r.match_updated_at,
+        sync: queueByDocument.get(r.document) ?? {
+          pending: 0,
+          done: 0,
+          dead: 0,
+          last_synced_at: null,
+          last_error: null,
+        },
+        stats: combineBookStats(snapshotsByDocument.get(r.document) ?? []),
       })),
     });
   });

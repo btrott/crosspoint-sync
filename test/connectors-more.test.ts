@@ -529,6 +529,52 @@ describe('candidates-first matching + metadata backfill', () => {
     expect(review.books).toHaveLength(1);
     expect(review.books[0]).toMatchObject({ document: DOC, title: 'Foundryside', matched: false });
   });
+
+  it('service detail includes queue totals, reading stats, and matches without progress', async () => {
+    const fake = fakeTransport();
+    const { app, db } = makeTestApp({}, { connectorTransport: fake.transport });
+    const { headers } = await registerUser(app);
+    await linkHardcover(app, headers, fake);
+    await app.request('/syncs/progress', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ document: DOC, progress: 'p', percentage: 0.42, device_id: 'd1', metadata: { title: 'Foundryside', authors: 'RJB' } }),
+    });
+    await app.request(`/api/v1/connectors/hardcover/matches/${DOC}`, {
+      method: 'PUT', headers,
+      body: JSON.stringify({ external_id: '42', title: 'Foundryside', author: 'RJB' }),
+    });
+    const matchOnly = 'b'.repeat(32);
+    await app.request(`/api/v1/connectors/hardcover/matches/${matchOnly}`, {
+      method: 'PUT', headers,
+      body: JSON.stringify({ external_id: '84', title: 'Shorefall', author: 'RJB' }),
+    });
+    await app.request('/api/v1/stats/books', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ device_id: 'd1', items: [{
+        document: DOC, v: 5, sessions: 3, seconds: 3600, pages: 120,
+        completed: false, avg_fwd: 10, pace_n: 20, eta: 100,
+        start_manual: false, finish_manual: false, start_date: 100, finished_date: 0,
+        tod: [0, 0, 0, 0], dow: [0, 0, 0, 0, 0, 0, 0],
+      }] }),
+    });
+    db.prepare("UPDATE connector_queue SET status = 'done' WHERE connector_id = 'hardcover'").run();
+
+    const review = await (await app.request('/api/v1/connectors/hardcover/review', { headers })).json();
+    expect(review.service).toMatchObject({ linked: true, matched: 2, unmatched: 0 });
+    expect(review.service.queue.done).toBe(1);
+    expect(review.books).toHaveLength(2);
+    expect(review.books.find((b: { document: string }) => b.document === DOC)).toMatchObject({
+      percentage: 0.42,
+      matched: true,
+      stats: { sessions: 3, seconds: 3600, pages: 120 },
+      sync: { done: 1 },
+    });
+    expect(review.books.find((b: { document: string }) => b.document === matchOnly)).toMatchObject({
+      title: 'Shorefall',
+      matched: true,
+      percentage: null,
+    });
+  });
 });
 
 describe('backfill / "Sync now"', () => {
