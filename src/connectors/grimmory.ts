@@ -113,7 +113,10 @@ function pageBooks(body: any): any[] {
 async function catalog(http: HttpTransport, c: GrimmoryCred): Promise<GrimmoryBook[]> {
   const out: GrimmoryBook[] = [];
   for (let page = 0; page < 100; page += 1) {
-    const r = await getJson(http, c, `/komga/api/v1/books?page=${page}&size=100&clean=true`);
+    // Do not enable Grimmory's optional `clean` mode. Grimmory 3.3.3 calls
+    // .toString() on a nullable series number while mapping clean responses,
+    // causing the entire catalog request to fail for ordinary standalone books.
+    const r = await getJson(http, c, `/komga/api/v1/books?page=${page}&size=100`);
     if (r.status === 401 || r.status === 403) throw new Error('invalid OPDS credentials');
     if (r.status === 404) throw new Error('Grimmory Komga API is unavailable or disabled');
     if (r.status < 200 || r.status >= 300) throw new Error(`Grimmory catalog returned ${r.status}`);
@@ -197,11 +200,7 @@ async function push(
   const c = parseCred(cred);
   if (!c) return { ok: false, retryable: false, needsReauth: true, error: 'bad credential' };
   try {
-    const book = await getJson(
-      http,
-      c,
-      `/komga/api/v1/books/${encodeURIComponent(m.externalId)}?clean=true`
-    );
+    const book = await getJson(http, c, `/komga/api/v1/books/${encodeURIComponent(m.externalId)}`);
     if (book.status === 401 || book.status === 403) {
       return { ok: false, retryable: false, needsReauth: true, error: 'OPDS authentication failed' };
     }

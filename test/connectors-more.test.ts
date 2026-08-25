@@ -146,11 +146,12 @@ describe('Grimmory connector', () => {
     );
     expect(result).toMatchObject({ externalId: '123', title: 'Foundryside' });
     expect(result?.externalEdition).toBeUndefined();
+    expect(fake.calls[0].url).not.toContain('clean=');
   });
 
   it('refreshes fileHash and pushes it as the KOReader document id', async () => {
     const fake = fakeTransport();
-    fake.on('/komga/api/v1/books/123?', 200, {
+    fake.on('/komga/api/v1/books/123', 200, {
       id: '123',
       name: 'Foundryside',
       fileHash: '2a376e11223344556677889900aabbcc',
@@ -164,6 +165,7 @@ describe('Grimmory connector', () => {
       fake.transport
     );
     expect(result).toEqual({ ok: true });
+    expect(fake.calls[0].url).toBe('https://books.test/komga/api/v1/books/123');
     const push = fake.calls.find((c) => c.url.includes('/syncs/progress'));
     expect(JSON.parse(push!.body!)).toMatchObject({
       document: '2a376e11223344556677889900aabbcc',
@@ -190,7 +192,7 @@ describe('Grimmory connector', () => {
       ],
       last: true,
     });
-    fake.on('/komga/api/v1/books/123?', 200, {
+    fake.on('/komga/api/v1/books/123', 200, {
       id: '123',
       name: 'Foundryside',
       fileHash: '2a376e11223344556677889900aabbcc',
