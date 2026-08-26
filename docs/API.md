@@ -387,6 +387,16 @@ server-side. See docs/design/sync-hub.md. All under `/api/v1`, same auth headers
 server to have `TOKEN_ENC_KEY` set (credentials are encrypted at rest) — otherwise these endpoints
 report `encryption: "disabled"` and linking returns 403.
 
+#### GET /api/v1/library
+
+Returns an account-scoped, document-first inventory for the Library UI. `items` is the union of
+documents known through metadata, progress, bookmarks, clippings, per-book stats, progress samples,
+connector matches, or queued connector work. Each item includes its latest progress and one status
+object per linked service.
+
+Service item states are `needs_match`, `ignored`, `matched`, `queued`, `synced`, or `error`.
+The response never includes another sync user's documents or connector accounts.
+
 #### GET /api/v1/connectors
 
 Lists available connectors and this account's link status.

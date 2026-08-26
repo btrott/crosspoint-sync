@@ -176,6 +176,16 @@ const STYLE = `
     font-size:12px; margin-top:9px; }
   .progress-track { height:5px; border-radius:999px; background:var(--stone-100); overflow:hidden; margin-top:10px; }
   .progress-track span { display:block; height:100%; background:var(--brand-400); border-radius:inherit; }
+  .library-wrap { overflow-x:auto; border-radius:12px; box-shadow:0 0 0 1px var(--ring); background:#fff; }
+  .library-table { width:100%; min-width:680px; border-collapse:collapse; font-size:13px; }
+  .library-table th { padding:12px 14px; text-align:left; color:var(--stone-500); font-size:11px;
+    text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--stone-200); white-space:nowrap; }
+  .library-table td { padding:14px; border-bottom:1px solid var(--stone-100); vertical-align:middle; }
+  .library-table tr:last-child td { border-bottom:0; }
+  .library-table .doc-cell { min-width:240px; }
+  .library-table .service-cell { white-space:nowrap; }
+  .library-table a.status-link { display:inline-flex; text-decoration:none; }
+  .pill.bad { color:#b91c1c; box-shadow:0 0 0 1px #f0cccc; background:#fef2f2; }
   @media (max-width:560px) { .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 `;
 
@@ -344,7 +354,8 @@ const ACCOUNT = shell(
   'Account',
   `<div>
      <span class="eyebrow">Account</span>
-     <h1>Signed in as <span id="who">…</span></h1>
+     <div class="row" style="align-items:flex-end"><h1>Signed in as <span id="who">…</span></h1>
+       <a href="/library"><button class="ghost">View library</button></a></div>
    </div>
 
    <h2 style="${SECTION}">CrossPoint Sync (KOSync)</h2>
@@ -521,6 +532,75 @@ $('delAccount').onclick = async () => {
   if (!confirm('Are you absolutely sure? Everything will be erased.')) return;
   await jsend('/account', 'DELETE'); location.href = '/';
 };
+</script>`,
+  true
+);
+
+const LIBRARY = shell(
+  'Library',
+  `<div><a class="muted" href="/account">&larr; Account</a></div>
+   <div style="margin-top:16px"><span class="eyebrow">Library</span>
+     <h1>Every document, across every service</h1>
+     <p class="sub">Your account's known documents and their current match and sync status.</p></div>
+   <div id="summary"><div class="metrics"><div class="metric"><div class="value">…</div><div class="label">Loading</div></div></div></div>
+   <div class="row" style="margin:24px 0 12px"><input id="filter" placeholder="Filter by title, author, filename, or document hash" style="max-width:28rem"></div>
+   <div id="library"><p class="muted">Loading…</p></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+let DATA = { services:[], items:[] };
+
+function metric(value, label) {
+  return '<div class="metric"><div class="value">' + esc(value) + '</div><div class="label">' + esc(label) + '</div></div>';
+}
+function statePill(cell) {
+  const states = {
+    needs_match: ['Needs match', 'warn'], ignored: ['Ignored', ''], matched: ['Matched', 'ok'],
+    queued: ['Queued', 'warn'], synced: ['Synced', 'ok'], error: ['Error', 'bad']
+  };
+  const value = states[cell.state] || [cell.state, ''];
+  const title = cell.last_error || (cell.external_id ? 'External ID: ' + cell.external_id : '');
+  return '<span class="pill ' + value[1] + '" title="' + esc(title) + '">' + esc(value[0]) + '</span>';
+}
+function render() {
+  const q = $('filter').value.trim().toLowerCase();
+  const items = DATA.items.filter(d => [d.title,d.author,d.filename,d.document].some(v => String(v || '').toLowerCase().includes(q)));
+  if (!DATA.items.length) {
+    $('library').innerHTML = '<div class="card"><p class="muted" style="margin:0">No documents are known yet. Sync reading data from your device first.</p></div>';
+    return;
+  }
+  if (!items.length) {
+    $('library').innerHTML = '<div class="card"><p class="muted" style="margin:0">No documents match that filter.</p></div>';
+    return;
+  }
+  const heads = DATA.services.map(s => '<th><a href="/review/' + encodeURIComponent(s.id) + '">' + esc(s.name) + '</a></th>').join('');
+  const rows = items.map(d => {
+    const name = d.title || d.filename || d.document.slice(0, 12) + '…';
+    const detail = [d.author, d.title && d.filename ? d.filename : null].filter(Boolean).join(' · ');
+    const services = DATA.services.map(s => '<td class="service-cell"><a class="status-link" href="/review/' + encodeURIComponent(s.id) + '">' + statePill(d.services[s.id]) + '</a></td>').join('');
+    return '<tr><td class="doc-cell"><div style="font-weight:600">' + esc(name) + '</div>'
+      + (detail ? '<div class="muted" style="margin-top:2px">' + esc(detail) + '</div>' : '')
+      + '<div class="mono muted" style="font-size:11px;margin-top:3px">' + esc(d.document) + '</div></td>'
+      + '<td>' + (d.percentage == null ? '<span class="muted">—</span>' : Math.round(d.percentage * 100) + '%') + '</td>' + services + '</tr>';
+  }).join('');
+  $('library').innerHTML = (DATA.services.length ? '' : '<div class="notice" style="margin-bottom:12px"><p class="muted" style="margin:0">Link a service to compare match and sync status.</p></div>')
+    + '<div class="library-wrap"><table class="library-table"><thead><tr><th>Document</th><th>Progress</th>' + heads + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+
+(async () => {
+  const response = await fetch('/api/v1/library');
+  if (response.status === 409) { location.href = '/account'; return; }
+  if (!response.ok) { $('library').innerHTML = '<p class="muted">Could not load the library.</p>'; return; }
+  DATA = await response.json();
+  const cells = DATA.items.flatMap(d => Object.values(d.services));
+  $('summary').innerHTML = '<div class="metrics">' + metric(DATA.items.length, 'Documents')
+    + metric(DATA.services.length, 'Linked services')
+    + metric(cells.filter(c => c.state === 'needs_match').length, 'Need matching')
+    + metric(cells.filter(c => c.state === 'error').length, 'Errors') + '</div>';
+  render();
+})();
+$('filter').oninput = render;
 </script>`,
   true
 );
@@ -827,6 +907,11 @@ export function webRoutes(): Hono<AppEnv> {
   app.get('/link/:id', (c) => {
     if (!verifySession(getCookie(c, SESSION_COOKIE))) return c.redirect('/');
     return c.html(LINK);
+  });
+
+  app.get('/library', (c) => {
+    if (!verifySession(getCookie(c, SESSION_COOKIE))) return c.redirect('/');
+    return c.html(LIBRARY);
   });
 
   app.get('/review/:id', (c) => {

@@ -12,6 +12,7 @@ import { clippingRoutes } from './routes/v1/clippings.js';
 import { statsRoutes } from './routes/v1/stats.js';
 import { documentRoutes } from './routes/v1/documents.js';
 import { connectorRoutes } from './routes/v1/connectors.js';
+import { libraryRoutes } from './routes/v1/library.js';
 import type { HttpTransport } from './connectors/types.js';
 
 // Injected at build time via package.json; read lazily to keep this file dependency-free.
@@ -48,6 +49,7 @@ export function createApp(db: DB, config: Config, opts: AppOptions = {}): Hono<A
   v1.route('/', statsRoutes(db));
   v1.route('/', documentRoutes(db));
   v1.route('/', connectorRoutes(db, opts.connectorTransport));
+  v1.route('/', libraryRoutes(db));
   app.route('/api/v1', v1);
 
   return app;
